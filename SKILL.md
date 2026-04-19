@@ -33,12 +33,48 @@ A four-stage workflow that compresses millions of words of PDFs into a structure
 |-------------|-----------------|----------|
 | **Output language** | "What language should the output be in?" | Chinese, English, Japanese, etc. |
 | **Citation format** | "What citation style should I use?" | APA, MLA, Chicago, GB/T 7714, author-year `(Smith, 2004)`, numbered `[1]`, etc. |
-| **Chapter structure** | "What is your exact chapter/section hierarchy?" | User provides headings like `1.1 Background → 1.2 Significance → 1.3 Methods; 2.1 Concepts → 2.2 Theory → 2.3 Review`, or says "use default structure" |
+| **Chapter structure** | "Do you want to provide your own chapter structure, or use a default template?" | User says "custom" or "default" |
+
+**Chapter structure — two paths:**
+
+**Path A: User provides custom structure**
+- Ask: "Please provide your exact chapter/section hierarchy (e.g., 1.1 Background → 1.2 Significance → 1.3 Methods; 2.1 Concepts → 2.2 Theory → 2.3 Review)"
+- Record verbatim. Stage 4 must follow this exactly.
+
+**Path B: User chooses default template**
+- Ask: "Which default template do you prefer — Chinese thesis structure or English thesis structure?"
+- Present both options and let the user pick one.
+
+**Default Chinese Thesis Structure:**
+```
+第一章 绪论
+  1.1 研究背景与问题提出
+  1.2 研究目的与意义（理论意义 + 实践意义）
+  1.3 研究思路与方法概述
+
+第二章 文献综述与理论框架
+  2.1 核心概念界定
+  2.2 理论基础与文献回顾（按主题簇组织）
+  2.3 文献评述与研究空间（贡献 → 不足 → 本研究切入点）
+```
+
+**Default English Thesis Structure:**
+```
+Chapter 1 Introduction
+  1.1 Research Background and Problem Statement
+  1.2 Research Objectives and Significance
+  1.3 Research Design and Methodology Overview
+
+Chapter 2 Literature Review and Theoretical Framework
+  2.1 Key Concepts and Definitions
+  2.2 Theoretical Foundations and Literature Review (organized by thematic clusters)
+  2.3 Critical Review and Research Gap (contributions → limitations → this study's entry point)
+```
 
 **Rules:**
-- If the user has not provided all three, **ask before proceeding**. Do not guess.
-- If the user says "use default structure", use a conventional thesis structure appropriate for their language/discipline.
-- Record all three configs at the top of the literature map document for reference throughout the workflow.
+- If the user has not provided all three configs, **ask before proceeding**. Do not guess.
+- Record all three configs (language, citation format, chosen structure) at the top of the literature map document for reference throughout the workflow.
+- If the user chose "custom" but hasn't provided the structure yet, **hold at Stage 0** until they do.
 
 ### Stage 1: Batch Extract PDF Metadata
 

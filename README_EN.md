@@ -8,6 +8,8 @@
 
 Transforms a folder of 10-100 PDFs into a structured literature map, then writes a complete thesis introduction and literature review — without reading every word.
 
+Supports **custom chapter structures** or **default templates** (Chinese / English thesis frameworks), automatically adapting to the user's specified citation format and output language.
+
 | Stage | Action | Output |
 |-------|--------|--------|
 | 1. Batch Extract | Script extracts metadata from all PDFs | JSON report with titles, authors, pages, text volume, scan detection |
