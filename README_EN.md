@@ -10,13 +10,38 @@ Transforms a folder of 10-100 literature files (PDF, DOCX, TXT, MD, EPUB) into a
 
 Supports **custom chapter structures** or **default templates** (Chinese / English thesis frameworks), automatically adapting to the user's specified citation format and output language.
 
-| Stage | Action | Output |
-|-------|--------|--------|
-| **0. User Configuration** | Confirm language, citation format, chapter structure, **research positioning** (title/abstract/keywords — any is fine) | Config checklist + user study positioning |
-| 1. Batch Extract | Script extracts metadata from all literature files | JSON report with titles, authors, pages, word count, text volume, scan detection |
-| 2. Cluster & Prioritize | Group into 5-8 thematic clusters, **score relevance against user's positioning** (Direct/Adjacent/Peripheral/Tangential), then assign reading tiers | Literature map with P0/P1/P2 reading tiers |
-| 3. Targeted Reading | Read by tier (full / abstract+conclusion / abstract only) | Extracted arguments and quotes |
-| 4. Structured Writing | Write according to user's chapter framework | Formatted introduction + review draft |
+<table>
+  <tr>
+    <th width="12%">Stage</th>
+    <th>Action</th>
+    <th width="28%">Output</th>
+  </tr>
+  <tr>
+    <td><b>0. Config</b></td>
+    <td>Confirm language, citation format, chapter structure, <b>research positioning</b> (title/abstract/keywords — any is fine)</td>
+    <td>Config checklist + user study positioning</td>
+  </tr>
+  <tr>
+    <td>1. Extract</td>
+    <td>Script extracts metadata from all literature files</td>
+    <td>JSON report (titles/authors/pages/word count/text volume/scan detection)</td>
+  </tr>
+  <tr>
+    <td>2. Cluster</td>
+    <td>Group into 5-8 thematic clusters, <b>score relevance against user's positioning</b> (Direct/Adjacent/Peripheral/Tangential), then assign reading tiers</td>
+    <td>Literature map (P0/P1/P2 reading tiers)</td>
+  </tr>
+  <tr>
+    <td>3. Read</td>
+    <td>Read by tier (full / abstract+conclusion / abstract only)</td>
+    <td>Extracted arguments and quotes</td>
+  </tr>
+  <tr>
+    <td>4. Write</td>
+    <td>Write according to user's chapter framework</td>
+    <td>Formatted introduction + review draft</td>
+  </tr>
+</table>
 
 ### Supported Formats Matrix
 
