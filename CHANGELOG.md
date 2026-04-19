@@ -19,6 +19,9 @@ All notable changes to this project will be documented in this file.
 - **Chinese compound surname support**: `_split_chinese_name()` recognizes 30+ compound surnames (欧阳, 司马, 诸葛, etc.). APA and MLA name converters now correctly handle Chinese names without whitespace delimiters.
 - **Enhanced scanned-PDF guidance**: Markdown report now appends a blockquote with specific OCR tool recommendations (`marker`, `nougat`, `pdf2image + pytesseract`) and installation/usage commands.
 - **Test coverage expanded**: 79 unit and integration tests (was 52), covering citation formats, BibTeX generation, bibliographic regex extraction, compound surnames, logging setup, and document-type heuristics.
+- **`argparse`-based CLI argument parsing**: Replaced the hand-rolled `while` loop argument parser with `argparse.ArgumentParser`. All existing short/long flags (`-m`, `-c`, `-o`, `-b`, `-v`, `-q`, `--no-recursive`) remain unchanged; adds automatic `--help` generation and strict type/choice validation.
+- **Package `__init__.py` files**: Added `__init__.py` to `core/`, `extractors/`, `citation/`, `cache/`, and `report/` so the module tree is recognized as a proper Python package.
+- **Dependency declaration files**: Added `requirements.txt` (runtime deps with minimum versions) and `pyproject.toml` (PEP 621 project metadata + build-system + CLI entry-point).
 
 ### Changed
 

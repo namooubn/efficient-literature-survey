@@ -1,1 +1,1 @@
-"""Core utilities for efficient-literature-survey."""
+# Core constants, helpers, and logging configuration.

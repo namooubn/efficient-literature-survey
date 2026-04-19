@@ -58,7 +58,7 @@
 ```bash
 mkdir -p ~/.claude/skills/
 cp -r efficient-literature-survey ~/.claude/skills/
-pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
+pip install -r requirements.txt
 ```
 
 **Step 2：打开 Claude Code，说一句**
@@ -126,7 +126,7 @@ cp -r efficient-literature-survey ~/.claude/skills/
 依赖：
 
 ```bash
-pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
+pip install -r requirements.txt
 ```
 
 ### 使用方式
@@ -186,6 +186,8 @@ efficient-literature-survey/
 ├── CHANGELOG.md                          # 版本变更日志
 ├── README.md                             # 中文版本（本文件）
 ├── README_EN.md                          # English version
+├── requirements.txt                      # 运行时依赖
+├── pyproject.toml                        # Python 包元数据与构建配置
 ├── core/
 │   ├── constants.py                      # SUPPORTED_EXTS, CAJ_EXT, 复姓表
 │   ├── helpers.py                        # 核心工具函数（字数统计、扫描检测、重复检测等）

@@ -54,7 +54,7 @@ Supports **custom chapter structures** or **default templates** (Chinese / Engli
 ```bash
 mkdir -p ~/.claude/skills/
 cp -r efficient-literature-survey ~/.claude/skills/
-pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
+pip install -r requirements.txt
 ```
 
 **Step 2: Open Claude Code and say**
@@ -120,7 +120,7 @@ cp -r efficient-literature-survey ~/.claude/skills/
 Dependencies:
 
 ```bash
-pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
+pip install -r requirements.txt
 ```
 
 ### Usage
@@ -180,6 +180,8 @@ efficient-literature-survey/
 ├── CHANGELOG.md                          # Version changelog
 ├── README.md                             # Chinese version
 ├── README_EN.md                          # English version (this file)
+├── requirements.txt                      # Runtime dependencies
+├── pyproject.toml                        # Python package metadata and build config
 ├── core/
 │   ├── constants.py                      # SUPPORTED_EXTS, CAJ_EXT, compound surname table
 │   ├── helpers.py                        # Core utilities (word count, scan detection, duplicates)

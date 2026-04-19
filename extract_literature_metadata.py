@@ -11,6 +11,7 @@ Dependencies:
     pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 """
 
+import argparse
 import json
 import logging
 import os
@@ -30,7 +31,10 @@ from citation.bibtex import generate_bibtex
 from core.constants import SUPPORTED_EXTS, CAJ_EXT
 from core.helpers import find_duplicates
 from core.logging_config import setup_logging
-from extractors import extract_pdf, extract_docx, extract_txt, extract_epub
+from extractors.pdf import extract_pdf
+from extractors.docx import extract_docx
+from extractors.txt import extract_txt
+from extractors.epub import extract_epub
 from report.generator import generate_markdown_report
 
 
@@ -106,64 +110,54 @@ def _interactive_prompt_unsupported(skipped: list, supported_exts: set) -> None:
 
 
 def main():
-    args = sys.argv[1:]
+    parser = argparse.ArgumentParser(
+        description="Batch-extract metadata from a folder of literature files."
+    )
+    parser.add_argument(
+        "folder",
+        nargs="?",
+        help="Path to the literature folder (optional; enters interactive mode if omitted)",
+    )
+    parser.add_argument(
+        "--max-pages", "-m", type=int, default=0,
+        help="Maximum pages to read per PDF (0 = use smart heuristic)",
+    )
+    parser.add_argument(
+        "--citation-style", "-c", default="gb7714",
+        choices=["gb7714", "apa", "mla", "numbered"],
+        help="Citation output style (default: gb7714)",
+    )
+    parser.add_argument(
+        "--output-dir", "-o", default=None,
+        help="Directory for output files (default: <folder>/.els_output)",
+    )
+    parser.add_argument(
+        "--bibtex", "-b", action="store_true",
+        help="Also export a BibTeX (.bib) file",
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Enable DEBUG-level logging",
+    )
+    parser.add_argument(
+        "--quiet", "-q", action="store_true",
+        help="Only show WARNING-level (and above) logging",
+    )
+    parser.add_argument(
+        "--no-recursive", action="store_true",
+        help="Disable recursive folder traversal",
+    )
 
-    # Help
-    if any(a in args for a in ("-h", "--help")):
-        print(__doc__)
-        sys.exit(0)
+    args = parser.parse_args()
 
-    # Parse optional flags
-    max_pages = 0
-    citation_style = "gb7714"
-    output_dir: Path | None = None
-    bibtex = False
-    verbose = False
-    quiet = False
-    recursive = True
-    i = 0
-    while i < len(args):
-        if args[i] in ("--max-pages", "-m") and i + 1 < len(args):
-            try:
-                max_pages = int(args[i + 1])
-                if max_pages < 0:
-                    max_pages = 0
-            except ValueError:
-                pass
-            i += 2
-        elif args[i] in ("--citation-style", "-c") and i + 1 < len(args):
-            citation_style = args[i + 1].lower()
-            i += 2
-        elif args[i] in ("--output-dir", "-o") and i + 1 < len(args):
-            output_dir = Path(args[i + 1]).expanduser()
-            i += 2
-        elif args[i] in ("--bibtex", "-b"):
-            bibtex = True
-            i += 1
-        elif args[i] in ("--verbose", "-v"):
-            verbose = True
-            i += 1
-        elif args[i] in ("--quiet", "-q"):
-            quiet = True
-            i += 1
-        elif args[i] in ("--no-recursive",):
-            recursive = False
-            i += 1
-        else:
-            i += 1
+    setup_logging(verbose=args.verbose, quiet=args.quiet)
 
-    setup_logging(verbose=verbose, quiet=quiet)
-
-    # Determine folder path (first non-flag positional arg)
-    pos_args = [a for a in args if not a.startswith("-")]
-    if not pos_args:
-        print("用法：python extract_literature_metadata.py <文献文件夹路径>")
-        print("  [--max-pages N] [--citation-style gb7714|apa|mla|numbered]")
-        print("  [--output-dir PATH] [--bibtex] [--verbose] [--quiet] [--no-recursive]")
+    # Determine folder path
+    if args.folder is None:
         print("未提供路径，进入交互模式...")
         lit_dir = _prompt_path()
     else:
-        lit_dir = Path(pos_args[0]).expanduser()
+        lit_dir = Path(args.folder).expanduser()
         if not lit_dir.exists():
             print(f"路径不存在：{lit_dir}")
             print("进入交互模式...")
@@ -174,10 +168,10 @@ def main():
             lit_dir = _prompt_path()
 
     # Collect files (recursive by default)
-    if recursive:
-        all_files = sorted([f for f in lit_dir.rglob("*") if f.is_file()])
-    else:
+    if args.no_recursive:
         all_files = sorted([f for f in lit_dir.iterdir() if f.is_file()])
+    else:
+        all_files = sorted([f for f in lit_dir.rglob("*") if f.is_file()])
 
     lit_files = [f for f in all_files if f.suffix.lower() in SUPPORTED_EXTS | CAJ_EXT]
     skipped = [f.name for f in all_files if f.suffix.lower() not in SUPPORTED_EXTS | CAJ_EXT]
@@ -192,8 +186,11 @@ def main():
         logging.info("跳过 %d 个不支持的文件", len(skipped))
 
     # Determine output directory
-    if output_dir is None:
+    output_dir: Path
+    if args.output_dir is None:
         output_dir = lit_dir / ".els_output"
+    else:
+        output_dir = Path(args.output_dir).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load cache for incremental extraction
@@ -225,7 +222,7 @@ def main():
         logging.info("使用 %d 线程并发处理...", max_workers)
 
         def _extract_with_log(path: str) -> dict:
-            info = extract_info(path, max_pages=max_pages)
+            info = extract_info(path, max_pages=args.max_pages)
             rel = Path(path).relative_to(lit_dir)
             info["relative_path"] = str(rel)
             info["filename"] = rel.name
@@ -281,7 +278,7 @@ def main():
     # Generate citations for each result
     for idx, r in enumerate(results, start=1):
         r["_citation_number"] = idx
-        r["citation"] = generate_citation(r, citation_style)
+        r["citation"] = generate_citation(r, args.citation_style)
 
     # Console summary
     print("\n" + "=" * 80)
@@ -299,8 +296,8 @@ def main():
 
     # JSON output
     output_payload = {
-        "citation_style": citation_style,
-        "max_pages": max_pages,
+        "citation_style": args.citation_style,
+        "max_pages": args.max_pages,
         "duplicates": duplicates,
         "results": results,
     }
@@ -312,14 +309,14 @@ def main():
     # Markdown report output
     md_path = output_dir / "_literature_report.md"
     md_content = generate_markdown_report(
-        results, lit_dir, skipped, duplicates, citation_style
+        results, lit_dir, skipped, duplicates, args.citation_style
     )
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_content)
     logging.info("Markdown 报告已保存：%s", md_path)
 
     # BibTeX output
-    if bibtex:
+    if args.bibtex:
         bib_path = output_dir / "_literature_references.bib"
         with open(bib_path, "w", encoding="utf-8") as f:
             f.write(generate_bibtex(results))
