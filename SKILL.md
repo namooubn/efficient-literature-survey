@@ -1,19 +1,21 @@
 ---
 name: efficient-literature-survey
-description: Use when the user needs to read a large number of PDF references (10+) and write a thesis introduction and literature review. Triggers include phrases like "帮我读文献", "写绪论和综述", "快速理解大量文献", "节省token读论文", "literature review", "thesis introduction", "batch read papers", "write my literature review", "帮我写文献综述", "批量读PDF写论文", "efficient literature survey", "save tokens reading papers", or when the user has a folder of PDFs and needs structured academic output.
+description: Use when the user needs to read a large number of literature references (10+) in PDF, DOCX, TXT, MD, or EPUB format and write a thesis introduction and literature review. Triggers include phrases like "帮我读文献", "写绪论和综述", "快速理解大量文献", "节省token读论文", "literature review", "thesis introduction", "batch read papers", "write my literature review", "帮我写文献综述", "批量读PDF写论文", "efficient literature survey", "save tokens reading papers", or when the user has a folder of literature files and needs structured academic output.
 ---
 
 # Efficient Literature Survey Workflow
 
 ## Overview
 
-A four-stage workflow that compresses millions of words of PDFs into a structured literature map, then writes a thesis introduction and literature review. **Core principle:** Never read every word — extract metadata, cluster by theme, and read only what the output needs.
+A four-stage workflow that compresses millions of words of literature into a structured literature map, then writes a thesis introduction and literature review. **Core principle:** Never read every word — extract metadata, cluster by theme, and read only what the output needs.
+
+**Supported formats:** PDF, DOCX (Word), TXT, MD (Markdown), EPUB. CAJ files are detected but require manual conversion to PDF first.
 
 **Token savings:** Typical reduction from 5M+ characters (full-text reading) to ~30k characters (structured map + targeted excerpts), a **99%+ reduction**.
 
 ## When to Use
 
-- User has 10-100 PDF references (papers, monographs, mixed Chinese/English)
+- User has 10-100 literature references (papers, monographs, mixed Chinese/English) in PDF, DOCX, TXT, MD, or EPUB format
 - User needs to write a thesis introduction and/or literature review
 - User mentions wanting to "save tokens" or "quickly understand" a large literature corpus
 - The task involves extracting themes, finding research gaps, and positioning the user's study
@@ -76,17 +78,28 @@ Chapter 2 Literature Review and Theoretical Framework
 - Record all three configs (language, citation format, chosen structure) at the top of the literature map document for reference throughout the workflow.
 - If the user chose "custom" but hasn't provided the structure yet, **hold at Stage 0** until they do.
 
-### Stage 1: Batch Extract PDF Metadata
+### Stage 1: Batch Extract Literature Metadata
 
-Run a Python script over the user's PDF folder to extract:
-- Title, author, year, page count
+Run a Python script over the user's literature folder to extract:
+- Title, author, year, page count, word count
 - Estimated text volume (character count from first N pages)
-- Scanned-image detection (low text count on multi-page PDFs)
+- Scanned-image detection for PDFs (low text count on multi-page files)
 - First-page preview text
 
-**Output:** A structured table (CSV/JSON/TXT) listing all references with their extraction status.
+**Supported formats:**
+| Format | Metadata extracted | Scanned detection |
+|--------|-------------------|-------------------|
+| **PDF** | Title, author, pages, text chars, word count | Yes (heuristic) |
+| **DOCX** | Title, author, text chars, word count | No |
+| **TXT / MD** | Text chars, word count | No |
+| **EPUB** | Title, author, text chars, word count | No |
+| **CAJ** | Filename only | N/A (conversion required) |
 
-**Decision point:** If a PDF is flagged as scanned (image-based), warn the user that OCR may be needed for full-text extraction, but metadata (title/author) may still be readable.
+**Output:** A structured table (JSON) listing all references with their extraction status.
+
+**Decision points:**
+- If a PDF is flagged as scanned (image-based), warn the user that OCR may be needed for full-text extraction, but metadata (title/author) may still be readable.
+- If CAJ files are detected, instruct the user to convert them to PDF using CAJViewer or `caj2pdf` before re-running the script.
 
 ### Stage 2: Build Literature Map (Cluster + Prioritize)
 
@@ -111,12 +124,12 @@ Based on the extracted metadata (titles, previews, page counts), cluster referen
 ### Stage 3: Targeted Reading by Tier
 
 **For P0 references:**
-- Use Read tool on the full PDF text (if extracted) or key chapters.
+- Use Read tool on the full text (if extracted) or key chapters.
 - Extract: core argument, key quotations, theoretical lineage, methodological approach.
 
 **For P1 references:**
 - Read abstract and conclusion.
-- Search within PDF for keywords matching the user's research question.
+- Search within the document for keywords matching the user's research question.
 - Extract: 2-3 sentences summarizing contribution + how it connects to the user's gap.
 
 **For P2 references:**
@@ -146,16 +159,18 @@ Write the introduction and literature review according to the **user's prescribe
 
 | Situation | Action |
 |-----------|--------|
-| User has 30+ PDFs in a folder | Run Stage 1 script immediately |
+| User has 30+ files in a folder | Run Stage 1 script immediately |
 | PDF is scanned/image-based | Flag it; read TOC or do targeted OCR on key pages only |
 | Monograph >200 pages | Extract TOC, identify 2-3 relevant chapters, ignore the rest |
 | User hasn't provided chapter structure | Ask for it in Stage 0 before writing; do not guess |
 | Reference is weakly related | Exclude from citation list; note it in the map as "tangential" |
 | User wants to "save tokens" | Emphasize the P0/P1/P2 tier system |
+| CAJ files detected | Instruct user to convert to PDF using CAJViewer or caj2pdf |
+| DOCX / EPUB / TXT / MD files | Process normally via the updated script |
 
 ## Common Mistakes
 
-1. **Reading everything.** Agents often default to opening every PDF. This burns context and produces shallow understanding. Always extract metadata first.
+1. **Reading everything.** Agents often default to opening every file. This burns context and produces shallow understanding. Always extract metadata first.
 2. **No clustering.** Without thematic clusters, the literature review becomes a list of summaries rather than an argument. Clusters create the review's narrative arc.
 3. **Guessing the thesis structure.** If the user hasn't provided the exact heading hierarchy (e.g., 2.2.1 vs 2.2.2), ask in Stage 0 before writing. A mismatched structure requires full rewrite.
 4. **Ignoring weak references.** Weak or tangential references should be explicitly flagged and potentially excluded. Citing irrelevant papers damages credibility.
@@ -164,13 +179,18 @@ Write the introduction and literature review according to the **user's prescribe
 
 ## Reusable Tool
 
-**`extract_pdf_metadata.py`** — Batch-extracts titles, authors, page counts, text volume, and scanned-page detection from a folder of PDFs.
+**`extract_literature_metadata.py`** — Batch-extracts titles, authors, page counts, word counts, text volume, and scanned-page detection from a folder of literature files (PDF, DOCX, TXT, MD, EPUB). CAJ files are flagged with a conversion note.
 
-See [`extract_pdf_metadata.py`](extract_pdf_metadata.py) for the script.
+See [`extract_literature_metadata.py`](extract_literature_metadata.py) for the script.
+
+**Dependencies:**
+```bash
+pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
+```
 
 ## Real-World Impact
 
-Applied to a corpus of **30 mixed Chinese/English PDFs** (including 3 monographs of 200+ pages each):
+Applied to a corpus of **30 mixed Chinese/English references** (including 3 monographs of 200+ pages each):
 - Full-text reading would require ~5M+ characters of context.
 - After metadata extraction + clustering, targeted reading consumed ~30k characters of full-text input.
 - Produced a **1,796-character introduction** and a **3,767-character literature review** with 35 properly positioned citations, organized into 8 thematic clusters.
