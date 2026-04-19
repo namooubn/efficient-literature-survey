@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for core helper functions in extract_literature_metadata.py.
+"""Unit and integration tests for efficient-literature-survey.
 
 Run with:
     python -m unittest test_extract_literature_metadata.py
@@ -11,26 +11,34 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from extract_literature_metadata import (
-    _detect_scanned_pdf,
-    _estimate_pages_from_chars,
-    _extract_bib_info_from_text,
-    _file_sha256,
-    _find_duplicates,
-    _get_pdf_read_pages,
-    _guess_bibtex_type,
-    _guess_doc_type,
-    _safe_truncate,
-    _setup_logging,
-    _smart_word_count,
-    _split_chinese_name,
-    extract_txt,
-    generate_bibtex,
-    generate_citation,
+# Ensure sub-package imports resolve when run standalone
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+from cache.manager import file_sha256, load_cache, save_cache
+from citation.bibtex import generate_bibtex, _guess_bibtex_type
+from citation.engine import generate_citation, _guess_doc_type
+from core.helpers import (
+    detect_scanned_pdf,
+    estimate_pages_from_chars,
+    extract_bib_info_from_text,
+    find_duplicates,
+    get_pdf_read_pages,
+    safe_truncate,
+    smart_word_count,
+    split_chinese_name,
 )
+from core.logging_config import setup_logging
+from extractors.base import make_result_template
+from extractors.txt import extract_txt
+from extractors.pdf import extract_pdf
+from extractors.docx import extract_docx
+from extractors.epub import extract_epub
 
-# Optional dependencies for integration tests
+# Optional dependencies for integration tests only
 HAS_PYPDF2 = False
 HAS_PYTHON_DOCX = False
 HAS_EBOOKLIB = False
@@ -53,112 +61,236 @@ try:
 except ImportError:
     pass
 
-if HAS_PYPDF2:
-    from extract_literature_metadata import extract_pdf
-if HAS_PYTHON_DOCX:
-    from extract_literature_metadata import extract_docx
-if HAS_EBOOKLIB:
-    from extract_literature_metadata import extract_epub
+
+# ---------------------------------------------------------------------------
+# Mock-based tests for extractors (no optional deps required)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractPdfMock(unittest.TestCase):
+    """Mock tests for extract_pdf that do not require PyPDF2."""
+
+    @patch("extractors.pdf.PdfReader")
+    def test_extracts_metadata(self, mock_reader_cls):
+        mock_page = MagicMock()
+        mock_page.extract_text.return_value = "Page one text content here."
+        mock_reader = MagicMock()
+        mock_reader.pages = [mock_page]
+        mock_reader.metadata = {
+            "/Author": "Test Author",
+            "/Title": "Test Title",
+            "/CreationDate": "D:20230101",
+        }
+        mock_reader_cls.return_value = mock_reader
+
+        info = extract_pdf("dummy.pdf")
+        self.assertEqual(info["author_from_meta"], "Test Author")
+        self.assertEqual(info["title_from_meta"], "Test Title")
+        self.assertEqual(info["year"], "2023")
+        self.assertEqual(info["pages"], 1)
+        self.assertFalse(info["is_scanned"])
+
+    @patch("extractors.pdf.PdfReader")
+    def test_scanned_detection(self, mock_reader_cls):
+        mock_page = MagicMock()
+        mock_page.extract_text.return_value = ""
+        mock_reader = MagicMock()
+        mock_reader.pages = [mock_page] * 10
+        mock_reader.metadata = {}
+        mock_reader_cls.return_value = mock_reader
+
+        info = extract_pdf("dummy.pdf")
+        self.assertTrue(info["is_scanned"])
+
+    @patch("extractors.pdf.PdfReader")
+    def test_corrupted_graceful(self, mock_reader_cls):
+        mock_reader_cls.side_effect = Exception("corrupted")
+        info = extract_pdf("dummy.pdf")
+        self.assertIn("corrupted", info["note"].lower())
+
+    @patch("extractors.pdf.PdfReader")
+    def test_year_from_filename_fallback(self, mock_reader_cls):
+        mock_reader = MagicMock()
+        mock_reader.pages = [MagicMock(extract_text=MagicMock(return_value="text"))]
+        mock_reader.metadata = {}
+        mock_reader_cls.return_value = mock_reader
+
+        info = extract_pdf("paper 2019 final.pdf")
+        self.assertEqual(info["year"], "2019")
+
+
+class TestExtractDocxMock(unittest.TestCase):
+    """Mock tests for extract_docx that do not require python-docx."""
+
+    @patch("extractors.docx.Document")
+    def test_extracts_metadata(self, mock_doc_cls):
+        mock_para = MagicMock()
+        mock_para.text = "Hello world this is a test paragraph."
+        mock_doc = MagicMock()
+        mock_doc.paragraphs = [mock_para]
+        mock_doc.core_properties.author = "Docx Author"
+        mock_doc.core_properties.title = "Docx Title"
+        mock_doc.tables = []
+        mock_doc_cls.return_value = mock_doc
+
+        info = extract_docx("dummy.docx")
+        self.assertEqual(info["author_from_meta"], "Docx Author")
+        self.assertEqual(info["title_from_meta"], "Docx Title")
+        self.assertEqual(info["format"], "docx")
+        self.assertGreater(info["word_count"], 0)
+
+    @patch("extractors.docx.Document")
+    def test_error_handling(self, mock_doc_cls):
+        mock_doc_cls.side_effect = Exception("bad docx")
+        info = extract_docx("dummy.docx")
+        self.assertIn("bad docx", info["note"])
+
+
+class TestExtractEpubMock(unittest.TestCase):
+    """Mock tests for extract_epub that do not require ebooklib."""
+
+    @patch("extractors.epub.epub")
+    @patch("extractors.epub.BeautifulSoup")
+    @patch("extractors.epub.ebooklib")
+    def test_extracts_metadata(self, mock_ebooklib, mock_soup_cls, mock_epub_module):
+        mock_item = MagicMock()
+        mock_item.get_type.return_value = mock_ebooklib.ITEM_DOCUMENT
+        mock_item.get_content.return_value = b"<html><body><p>EPUB text.</p></body></html>"
+
+        mock_book = MagicMock()
+        mock_book.get_metadata.side_effect = lambda dc, field: {
+            ("DC", "title"): [("Epub Title", {})],
+            ("DC", "creator"): [("Epub Author", {})],
+        }.get((dc, field), [])
+        mock_book.get_items.return_value = [mock_item]
+        mock_epub_module.read_epub.return_value = mock_book
+
+        mock_soup = MagicMock()
+        mock_soup.get_text.return_value = "EPUB text."
+        mock_soup_cls.return_value = mock_soup
+
+        info = extract_epub("dummy.epub")
+        self.assertEqual(info["title_from_meta"], "Epub Title")
+        self.assertEqual(info["author_from_meta"], "Epub Author")
+        self.assertEqual(info["format"], "epub")
+
+    @patch("extractors.epub.epub")
+    @patch("extractors.epub.BeautifulSoup")
+    @patch("extractors.epub.ebooklib")
+    def test_error_handling(self, mock_ebooklib, mock_soup_cls, mock_epub_module):
+        mock_epub_module.read_epub.side_effect = Exception("bad epub")
+        info = extract_epub("dummy.epub")
+        self.assertIn("bad epub", info["note"])
+
+
+class TestExtractInfoDispatcher(unittest.TestCase):
+    """Tests for the top-level extract_info dispatcher."""
+
+    def test_unsupported_format(self):
+        from extract_literature_metadata import extract_info
+        info = extract_info("file.xyz")
+        self.assertIn("Unsupported", info["note"])
+
+    def test_caj_format(self):
+        from extract_literature_metadata import extract_info
+        info = extract_info("file.caj")
+        self.assertEqual(info["format"], "caj")
+        self.assertIn("CAJ", info["note"])
+
+
+# ---------------------------------------------------------------------------
+# Core helper tests
+# ---------------------------------------------------------------------------
 
 
 class TestSmartWordCount(unittest.TestCase):
-    """Tests for _smart_word_count with mixed CJK/English text."""
-
     def test_pure_chinese(self):
         text = "这是一个测试句子，包含多个中文字符。"
-        self.assertEqual(_smart_word_count(text), 16)
+        self.assertEqual(smart_word_count(text), 16)
 
     def test_pure_english(self):
         text = "This is a simple test sentence."
-        self.assertEqual(_smart_word_count(text), 6)
+        self.assertEqual(smart_word_count(text), 6)
 
     def test_mixed_chinese_english(self):
         text = "这是test一个mixed案例case。"
-        self.assertEqual(_smart_word_count(text), 6)
+        self.assertEqual(smart_word_count(text), 6)
 
     def test_empty_string(self):
-        self.assertEqual(_smart_word_count(""), 0)
+        self.assertEqual(smart_word_count(""), 0)
 
     def test_punctuation_only(self):
-        self.assertEqual(_smart_word_count("！？，。;:"), 1)
+        self.assertEqual(smart_word_count("！？，。;:"), 1)
 
     def test_numbers_and_english(self):
         text = "In 2024, there are 3 major updates."
-        self.assertEqual(_smart_word_count(text), 7)
+        self.assertEqual(smart_word_count(text), 7)
 
 
 class TestDetectScannedPdf(unittest.TestCase):
-    """Tests for _detect_scanned_pdf multi-page sampling heuristic."""
-
     def test_dense_text_not_scanned(self):
         page_texts = ["a" * 600 for _ in range(10)]
-        self.assertFalse(_detect_scanned_pdf(page_texts, 10))
+        self.assertFalse(detect_scanned_pdf(page_texts, 10))
 
     def test_empty_pages_scanned(self):
         page_texts = [""] * 10
-        self.assertTrue(_detect_scanned_pdf(page_texts, 10))
+        self.assertTrue(detect_scanned_pdf(page_texts, 10))
 
     def test_cover_image_then_text(self):
         page_texts = [""] + ["a" * 500 for _ in range(9)]
-        self.assertFalse(_detect_scanned_pdf(page_texts, 10))
+        self.assertFalse(detect_scanned_pdf(page_texts, 10))
 
     def test_short_doc_safe(self):
         page_texts = ["abc"]
-        self.assertFalse(_detect_scanned_pdf(page_texts, 1))
+        self.assertFalse(detect_scanned_pdf(page_texts, 1))
 
     def test_low_density_scanned(self):
         page_texts = ["x" * 8 for _ in range(20)]
-        self.assertTrue(_detect_scanned_pdf(page_texts, 20))
+        self.assertTrue(detect_scanned_pdf(page_texts, 20))
 
     def test_no_pages(self):
-        self.assertFalse(_detect_scanned_pdf([], 0))
+        self.assertFalse(detect_scanned_pdf([], 0))
 
 
 class TestEstimatePagesFromChars(unittest.TestCase):
-    """Tests for _estimate_pages_from_chars."""
-
     def test_normal(self):
-        self.assertEqual(_estimate_pages_from_chars(1000), 2)
+        self.assertEqual(estimate_pages_from_chars(1000), 2)
 
     def test_exact_multiple(self):
-        self.assertEqual(_estimate_pages_from_chars(500), 1)
+        self.assertEqual(estimate_pages_from_chars(500), 1)
 
     def test_zero_fallback(self):
-        self.assertEqual(_estimate_pages_from_chars(0), 1)
+        self.assertEqual(estimate_pages_from_chars(0), 1)
 
     def test_custom_chars_per_page(self):
-        self.assertEqual(_estimate_pages_from_chars(1000, chars_per_page=300), 4)
+        self.assertEqual(estimate_pages_from_chars(1000, chars_per_page=300), 4)
 
 
 class TestSafeTruncate(unittest.TestCase):
-    """Tests for _safe_truncate."""
-
     def test_truncate_long(self):
         text = "a" * 3000
-        self.assertEqual(len(_safe_truncate(text)), 2000)
+        self.assertEqual(len(safe_truncate(text)), 2000)
 
     def test_no_truncate_short(self):
         text = "short text"
-        self.assertEqual(_safe_truncate(text), text)
+        self.assertEqual(safe_truncate(text), text)
 
     def test_empty(self):
-        self.assertEqual(_safe_truncate(""), "")
+        self.assertEqual(safe_truncate(""), "")
 
     def test_custom_limit(self):
         text = "hello world"
-        self.assertEqual(_safe_truncate(text, limit=5), "hello")
+        self.assertEqual(safe_truncate(text, limit=5), "hello")
 
 
 class TestFileSha256(unittest.TestCase):
-    """Tests for _file_sha256 incremental cache key generation."""
-
     def test_normal_file(self):
         with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8") as f:
             f.write("hello world")
             path = f.name
         try:
-            h1 = _file_sha256(path)
-            h2 = _file_sha256(path)
+            h1 = file_sha256(path)
+            h2 = file_sha256(path)
             self.assertEqual(len(h1), 64)
             self.assertEqual(h1, h2)
         finally:
@@ -168,13 +300,13 @@ class TestFileSha256(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8") as f:
             path = f.name
         try:
-            h = _file_sha256(path)
+            h = file_sha256(path)
             self.assertEqual(len(h), 64)
         finally:
             os.unlink(path)
 
     def test_nonexistent_file(self):
-        self.assertEqual(_file_sha256("/nonexistent/path/file.txt"), "")
+        self.assertEqual(file_sha256("/nonexistent/path/file.txt"), "")
 
     def test_different_files_different_hash(self):
         with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8") as f1:
@@ -184,46 +316,42 @@ class TestFileSha256(unittest.TestCase):
             f2.write("content B")
             p2 = f2.name
         try:
-            self.assertNotEqual(_file_sha256(p1), _file_sha256(p2))
+            self.assertNotEqual(file_sha256(p1), file_sha256(p2))
         finally:
             os.unlink(p1)
             os.unlink(p2)
 
 
 class TestGetPdfReadPages(unittest.TestCase):
-    """Tests for PDF read-strategy heuristic."""
-
     def test_short_doc_reads_all(self):
-        self.assertEqual(_get_pdf_read_pages(30), list(range(30)))
+        self.assertEqual(get_pdf_read_pages(30), list(range(30)))
 
     def test_exactly_50_reads_all(self):
-        self.assertEqual(_get_pdf_read_pages(50), list(range(50)))
+        self.assertEqual(get_pdf_read_pages(50), list(range(50)))
 
     def test_long_doc_samples(self):
-        pages = _get_pdf_read_pages(100)
+        pages = get_pdf_read_pages(100)
         self.assertEqual(pages[:15], list(range(15)))
         self.assertEqual(pages[-5:], list(range(95, 100)))
         self.assertEqual(len(pages), 20)
 
     def test_max_pages_override(self):
-        self.assertEqual(_get_pdf_read_pages(100, max_pages=5), list(range(5)))
+        self.assertEqual(get_pdf_read_pages(100, max_pages=5), list(range(5)))
 
     def test_zero_max_pages_ignored(self):
-        self.assertEqual(_get_pdf_read_pages(10, max_pages=0), list(range(10)))
+        self.assertEqual(get_pdf_read_pages(10, max_pages=0), list(range(10)))
 
     def test_negative_max_pages_ignored(self):
-        self.assertEqual(_get_pdf_read_pages(10, max_pages=-3), list(range(10)))
+        self.assertEqual(get_pdf_read_pages(10, max_pages=-3), list(range(10)))
 
 
 class TestFindDuplicates(unittest.TestCase):
-    """Tests for duplicate detection by title similarity."""
-
     def test_exact_match(self):
         results = [
             {"filename": "a.pdf", "title_from_meta": "Deep Learning"},
             {"filename": "b.pdf", "title_from_meta": "Deep Learning"},
         ]
-        dups = _find_duplicates(results, threshold=0.90)
+        dups = find_duplicates(results, threshold=0.90)
         self.assertIn("a.pdf", dups)
         self.assertIn("b.pdf", dups)
 
@@ -232,7 +360,7 @@ class TestFindDuplicates(unittest.TestCase):
             {"filename": "a.pdf", "title_from_meta": "Deep Learning"},
             {"filename": "b.pdf", "title_from_meta": "Quantum Computing"},
         ]
-        dups = _find_duplicates(results, threshold=0.90)
+        dups = find_duplicates(results, threshold=0.90)
         self.assertEqual(dups, {})
 
     def test_fallback_to_filename(self):
@@ -240,13 +368,11 @@ class TestFindDuplicates(unittest.TestCase):
             {"filename": "same_title.pdf", "title_from_meta": ""},
             {"filename": "same_title.pdf", "title_from_meta": ""},
         ]
-        dups = _find_duplicates(results, threshold=0.90)
+        dups = find_duplicates(results, threshold=0.90)
         self.assertIn("same_title.pdf", dups)
 
 
 class TestGenerateCitation(unittest.TestCase):
-    """Tests for citation formatting across styles."""
-
     def test_gb7714_single_author(self):
         meta = {"author_from_meta": "张三", "title_from_meta": "人工智能导论", "filename": "x.pdf", "format": "pdf"}
         cite = generate_citation(meta, "gb7714")
@@ -334,61 +460,55 @@ class TestGenerateCitation(unittest.TestCase):
 
 
 class TestSplitChineseName(unittest.TestCase):
-    """Tests for compound surname handling."""
-
     def test_single_surname(self):
-        self.assertEqual(_split_chinese_name("张三"), ("张", "三"))
+        self.assertEqual(split_chinese_name("张三"), ("张", "三"))
 
     def test_compound_surname(self):
-        self.assertEqual(_split_chinese_name("欧阳明"), ("欧阳", "明"))
+        self.assertEqual(split_chinese_name("欧阳明"), ("欧阳", "明"))
 
     def test_compound_surname_long(self):
-        self.assertEqual(_split_chinese_name("司马相如"), ("司马", "相如"))
+        self.assertEqual(split_chinese_name("司马相如"), ("司马", "相如"))
 
     def test_empty(self):
-        self.assertEqual(_split_chinese_name(""), ("", ""))
+        self.assertEqual(split_chinese_name(""), ("", ""))
 
     def test_with_spaces(self):
-        self.assertEqual(_split_chinese_name("  张三  "), ("张", "三"))
+        self.assertEqual(split_chinese_name("  张三  "), ("张", "三"))
 
 
 class TestExtractBibInfoFromText(unittest.TestCase):
-    """Tests for bibliographic metadata extraction from text."""
-
     def test_doi_extraction(self):
         text = "This paper is published with DOI: 10.1234/example.5678"
-        info = _extract_bib_info_from_text(text)
+        info = extract_bib_info_from_text(text)
         self.assertEqual(info["doi"], "10.1234/example.5678")
 
     def test_volume_issue_english(self):
         text = "Journal of AI, Vol. 12, No. 3, pp. 45-67"
-        info = _extract_bib_info_from_text(text)
+        info = extract_bib_info_from_text(text)
         self.assertEqual(info["volume"], "12")
         self.assertEqual(info["issue"], "3")
         self.assertEqual(info["page_range"], "45-67")
 
     def test_chinese_volume_issue(self):
         text = "发表于《计算机学报》第 15 卷第 2 期，第 100-120 页"
-        info = _extract_bib_info_from_text(text)
+        info = extract_bib_info_from_text(text)
         self.assertEqual(info["volume"], "15")
         self.assertEqual(info["issue"], "2")
         self.assertEqual(info["page_range"], "100-120")
         self.assertEqual(info["journal"], "计算机学报")
 
     def test_no_match(self):
-        info = _extract_bib_info_from_text("")
+        info = extract_bib_info_from_text("")
         self.assertEqual(info["doi"], "")
         self.assertEqual(info["journal"], "")
 
     def test_journal_book_title(self):
         text = "Published in 《自然语言处理》杂志"
-        info = _extract_bib_info_from_text(text)
+        info = extract_bib_info_from_text(text)
         self.assertEqual(info["journal"], "自然语言处理")
 
 
 class TestGuessDocType(unittest.TestCase):
-    """Tests for document type guessing."""
-
     def test_short_pdf_is_journal(self):
         self.assertEqual(_guess_doc_type({"format": "pdf", "pages": 10}), "J")
 
@@ -400,8 +520,6 @@ class TestGuessDocType(unittest.TestCase):
 
 
 class TestGuessBibtexType(unittest.TestCase):
-    """Tests for BibTeX entry type guessing."""
-
     def test_with_journal(self):
         self.assertEqual(_guess_bibtex_type({"journal": "Nature", "pages": 10}), "article")
 
@@ -413,8 +531,6 @@ class TestGuessBibtexType(unittest.TestCase):
 
 
 class TestGenerateBibtex(unittest.TestCase):
-    """Tests for BibTeX generation."""
-
     def test_single_entry(self):
         results = [
             {
@@ -460,19 +576,43 @@ class TestGenerateBibtex(unittest.TestCase):
 
 
 class TestSetupLogging(unittest.TestCase):
-    """Tests for logging setup."""
-
     def test_verbose_sets_debug(self):
-        _setup_logging(verbose=True, quiet=False)
+        setup_logging(verbose=True, quiet=False)
         self.assertEqual(logging.getLogger().level, logging.DEBUG)
 
     def test_quiet_sets_warning(self):
-        _setup_logging(verbose=False, quiet=True)
+        setup_logging(verbose=False, quiet=True)
         self.assertEqual(logging.getLogger().level, logging.WARNING)
 
     def test_default_sets_info(self):
-        _setup_logging(verbose=False, quiet=False)
+        setup_logging(verbose=False, quiet=False)
         self.assertEqual(logging.getLogger().level, logging.INFO)
+
+
+class TestCacheManager(unittest.TestCase):
+    """Tests for cache manager keyed by relative path."""
+
+    def test_roundtrip(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "cache.json"
+            data = {"files": {"subdir/paper.pdf": {"sha256": "abc123", "result": {"pages": 10}}}}
+            save_cache(path, data["files"])
+            loaded = load_cache(path)
+            self.assertEqual(loaded["subdir/paper.pdf"]["sha256"], "abc123")
+
+    def test_missing_file_returns_empty(self):
+        loaded = load_cache(Path("/nonexistent/cache.json"))
+        self.assertEqual(loaded, {})
+
+    def test_version_in_payload(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "cache.json"
+            save_cache(path, {})
+            with open(path, "r", encoding="utf-8") as f:
+                import json
+                payload = json.load(f)
+            self.assertEqual(payload["version"], 2)
+            self.assertIn("generated_at", payload)
 
 
 class TestExtractTxt(unittest.TestCase):
@@ -523,12 +663,16 @@ class TestExtractTxt(unittest.TestCase):
             os.unlink(path)
 
 
+# ---------------------------------------------------------------------------
+# Integration tests requiring optional dependencies
+# ---------------------------------------------------------------------------
+
+
 @unittest.skipUnless(HAS_PYPDF2, "PyPDF2 not installed")
-class TestExtractPdf(unittest.TestCase):
+class TestExtractPdfIntegration(unittest.TestCase):
     """Integration tests for extract_pdf."""
 
     def _make_blank_pdf(self, page_count: int) -> str:
-        """Create a blank PDF with the given number of pages."""
         from PyPDF2 import PdfWriter
         writer = PdfWriter()
         for _ in range(page_count):
@@ -590,7 +734,7 @@ class TestExtractPdf(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_PYTHON_DOCX, "python-docx not installed")
-class TestExtractDocx(unittest.TestCase):
+class TestExtractDocxIntegration(unittest.TestCase):
     """Integration tests for extract_docx."""
 
     def test_normal_docx(self):
@@ -642,7 +786,7 @@ class TestExtractDocx(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_EBOOKLIB, "ebooklib not installed")
-class TestExtractEpub(unittest.TestCase):
+class TestExtractEpubIntegration(unittest.TestCase):
     """Integration tests for extract_epub."""
 
     def test_normal_epub(self):

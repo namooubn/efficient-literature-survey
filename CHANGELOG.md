@@ -37,6 +37,33 @@ All notable changes to this project will be documented in this file.
 - Scanned-image false positives caused by image-only first pages (e.g., journal cover pages with text content later in the document).
 - Chinese-name APA/MLA formatting failed for names without spaces (e.g., `欧阳明` was not recognized as `欧阳, M.`).
 - `logging.basicConfig()` did not override existing handlers when called multiple times (e.g., in test suites).
+- Cross-subfolder cache key collision: previously used `lf.name` (bare filename) as cache key, causing false hits for identically-named files in different subfolders. Now uses `str(lf.relative_to(lit_dir))` (relative path) as cache key.
+
+### Refactored
+
+- **Modular architecture**: Split the 1,282-line monolithic `extract_literature_metadata.py` into a clean module structure:
+  - `core/` — constants, helpers, logging config
+  - `extractors/` — format-specific extractors (PDF/DOCX/TXT/EPUB) with module-level lazy imports for optional dependencies
+  - `citation/` — citation engine + BibTeX generator
+  - `cache/` — cache manager (upgraded to version 2)
+  - `report/` — Markdown report generator
+  - `extract_literature_metadata.py` remains the CLI entry point for full backward compatibility.
+
+### Added (Tests)
+
+- Mock-based unit tests that run without optional dependencies installed:
+  - `TestExtractPdfMock` (4 cases: metadata extraction, scan detection, corrupted file, year-from-filename fallback)
+  - `TestExtractDocxMock` (2 cases)
+  - `TestExtractEpubMock` (2 cases)
+  - `TestExtractInfoDispatcher` (2 cases: unsupported format, CAJ format)
+  - `TestCacheManager` (3 cases: roundtrip, missing file, version number)
+- Total test count: 79 → 92+.
+
+### Changed
+
+- Optional dependencies (`PyPDF2`, `python-docx`, `ebooklib`) now use module-level `try/except` imports; functions return friendly messages instead of crashing when dependencies are missing.
+- Cache format upgraded from `version: 1` to `version: 2`. Old caches are ignored and automatically rebuilt — no breaking changes.
+- `SKILL.md` compressed from 456 lines to ~220 lines; full example dialogue moved to README.md.
 
 ### Skipped
 

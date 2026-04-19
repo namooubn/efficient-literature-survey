@@ -175,12 +175,59 @@ If you don't use Claude Code, you can still use the **Python script standalone**
 ```
 efficient-literature-survey/
 ├── SKILL.md                              # Core skill document for Claude (Claude Code only)
-├── extract_literature_metadata.py        # Standalone batch extraction script (any Python env)
-├── test_extract_literature_metadata.py # Unit tests (79 test cases)
-├── CHANGELOG.md                        # Version changelog
-├── README.md                           # Chinese version
-└── README_EN.md                        # English version (this file)
+├── extract_literature_metadata.py        # CLI entry point (backward-compatible, any Python env)
+├── test_extract_literature_metadata.py   # Unit tests (92+ test cases)
+├── CHANGELOG.md                          # Version changelog
+├── README.md                             # Chinese version
+├── README_EN.md                          # English version (this file)
+├── core/
+│   ├── constants.py                      # SUPPORTED_EXTS, CAJ_EXT, compound surname table
+│   ├── helpers.py                        # Core utilities (word count, scan detection, duplicates)
+│   └── logging_config.py                 # Logging setup
+├── extractors/
+│   ├── base.py                           # Result template factory
+│   ├── pdf.py                            # PDF extractor
+│   ├── docx.py                           # DOCX extractor
+│   ├── txt.py                            # TXT/MD extractor
+│   └── epub.py                           # EPUB extractor
+├── citation/
+│   ├── engine.py                         # Citation format engine (APA/MLA/GB)
+│   └── bibtex.py                         # BibTeX generator
+├── cache/
+│   └── manager.py                        # Cache manager (version 2)
+└── report/
+    └── generator.py                      # Markdown report generator
 ```
+
+### Developers
+
+#### Module Architecture
+
+This project uses a **modular architecture**, splitting the original 1,282-line monolithic script into cleanly separated submodules:
+
+- **`core/`** — Constants, helper utilities, logging configuration
+- **`extractors/`** — Format-specific extractors (PDF/DOCX/TXT/EPUB) with module-level lazy imports for optional dependencies
+- **`citation/`** — Citation format engine + BibTeX generator
+- **`cache/`** — Incremental cache based on SHA-256 + relative path (version 2)
+- **`report/`** — Markdown report generator
+
+#### Backward Compatibility
+
+`extract_literature_metadata.py` remains the CLI entry point. All CLI arguments, output file formats, and JSON/Markdown structures are fully backward-compatible with pre-v1.2.0 releases. The cache auto-upgrades from `version: 1` to `version: 2`; old caches are ignored and rebuilt automatically — no breaking changes.
+
+#### Running Tests
+
+```bash
+python -m unittest test_extract_literature_metadata.py -v
+```
+
+Current test coverage includes:
+- Mock-based tests for PDF/DOCX/EPUB extractors (no optional dependencies required)
+- Cache manager roundtrip tests
+- Extractor dispatcher routing tests
+- Integration tests for citation formats, BibTeX generation, and duplicate detection
+
+---
 
 ### How It Saves Tokens
 

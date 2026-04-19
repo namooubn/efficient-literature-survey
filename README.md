@@ -181,12 +181,59 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 ```
 efficient-literature-survey/
 ├── SKILL.md                              # Claude 读取的核心 skill 文档（仅 Claude Code 有效）
-├── extract_literature_metadata.py        # 独立批量提取脚本（任何 Python 环境可用）
-├── test_extract_literature_metadata.py # 单元测试（79 个用例）
-├── CHANGELOG.md                        # 版本变更日志
-├── README.md                           # 中文版本（本文件）
-└── README_EN.md                        # English version
+├── extract_literature_metadata.py        # CLI 入口（向后兼容，任何 Python 环境可用）
+├── test_extract_literature_metadata.py   # 单元测试（92+ 个用例）
+├── CHANGELOG.md                          # 版本变更日志
+├── README.md                             # 中文版本（本文件）
+├── README_EN.md                          # English version
+├── core/
+│   ├── constants.py                      # SUPPORTED_EXTS, CAJ_EXT, 复姓表
+│   ├── helpers.py                        # 核心工具函数（字数统计、扫描检测、重复检测等）
+│   └── logging_config.py                 # 日志配置
+├── extractors/
+│   ├── base.py                           # 结果模板工厂
+│   ├── pdf.py                            # PDF 提取器
+│   ├── docx.py                           # DOCX 提取器
+│   ├── txt.py                            # TXT/MD 提取器
+│   └── epub.py                           # EPUB 提取器
+├── citation/
+│   ├── engine.py                         # 引用格式引擎（APA/MLA/GB）
+│   └── bibtex.py                         # BibTeX 生成器
+├── cache/
+│   └── manager.py                        # 缓存管理（version 2）
+└── report/
+    └── generator.py                      # Markdown 报告生成
 ```
+
+### 开发者
+
+#### 模块架构
+
+本项目采用**模块化拆分**设计，将原先 1282 行的单体脚本拆分为职责清晰的子模块：
+
+- **`core/`** — 常量、工具函数、日志配置
+- **`extractors/`** — 各格式提取器（PDF/DOCX/TXT/EPUB），可选依赖采用模块级懒加载
+- **`citation/`** — 引用格式引擎 + BibTeX 生成器
+- **`cache/`** — 基于 SHA-256 + 相对路径的增量缓存（version 2）
+- **`report/`** — Markdown 报告生成器
+
+#### 向后兼容
+
+`extract_literature_metadata.py` 保留为 CLI 入口，所有命令行参数、输出文件格式、JSON/Markdown 结构均与 v1.2.0 之前保持一致。缓存从 `version: 1` 自动升级到 `version: 2`，旧缓存会被忽略并自动重新提取，无破坏性变更。
+
+#### 运行测试
+
+```bash
+python -m unittest test_extract_literature_metadata.py -v
+```
+
+当前测试覆盖：
+- PDF/DOCX/EPUB 提取器的 mock 测试（不依赖可选库）
+- 缓存管理器 roundtrip 测试
+- 提取器 dispatcher 路由测试
+- 引用格式、BibTeX 生成、重复检测等集成测试
+
+---
 
 ### 为什么能省 Token
 
