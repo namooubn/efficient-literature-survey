@@ -5,6 +5,7 @@ Run with:
     python -m unittest test_extract_literature_metadata.py
 """
 
+import logging
 import os
 import sys
 import tempfile
@@ -14,12 +15,18 @@ from pathlib import Path
 from extract_literature_metadata import (
     _detect_scanned_pdf,
     _estimate_pages_from_chars,
+    _extract_bib_info_from_text,
     _file_sha256,
     _find_duplicates,
     _get_pdf_read_pages,
+    _guess_bibtex_type,
+    _guess_doc_type,
     _safe_truncate,
+    _setup_logging,
     _smart_word_count,
+    _split_chinese_name,
     extract_txt,
+    generate_bibtex,
     generate_citation,
 )
 
@@ -59,7 +66,6 @@ class TestSmartWordCount(unittest.TestCase):
 
     def test_pure_chinese(self):
         text = "这是一个测试句子，包含多个中文字符。"
-        # 16 Chinese chars + 0 English tokens
         self.assertEqual(_smart_word_count(text), 16)
 
     def test_pure_english(self):
@@ -68,19 +74,16 @@ class TestSmartWordCount(unittest.TestCase):
 
     def test_mixed_chinese_english(self):
         text = "这是test一个mixed案例case。"
-        # 4 Chinese chars + 2 English tokens
         self.assertEqual(_smart_word_count(text), 6)
 
     def test_empty_string(self):
         self.assertEqual(_smart_word_count(""), 0)
 
     def test_punctuation_only(self):
-        # Pure punctuation falls back to len(text.split()) -> 1 token
         self.assertEqual(_smart_word_count("！？，。;:"), 1)
 
     def test_numbers_and_english(self):
         text = "In 2024, there are 3 major updates."
-        # Pure English falls back to len(text.split()) = 7 tokens
         self.assertEqual(_smart_word_count(text), 7)
 
 
@@ -96,17 +99,14 @@ class TestDetectScannedPdf(unittest.TestCase):
         self.assertTrue(_detect_scanned_pdf(page_texts, 10))
 
     def test_cover_image_then_text(self):
-        # First page is cover image, rest are text
         page_texts = [""] + ["a" * 500 for _ in range(9)]
         self.assertFalse(_detect_scanned_pdf(page_texts, 10))
 
     def test_short_doc_safe(self):
-        # 1-page doc with almost no text should not be flagged
         page_texts = ["abc"]
         self.assertFalse(_detect_scanned_pdf(page_texts, 1))
 
     def test_low_density_scanned(self):
-        # Multi-page with very low text density
         page_texts = ["x" * 8 for _ in range(20)]
         self.assertTrue(_detect_scanned_pdf(page_texts, 20))
 
@@ -201,7 +201,6 @@ class TestGetPdfReadPages(unittest.TestCase):
 
     def test_long_doc_samples(self):
         pages = _get_pdf_read_pages(100)
-        # First 15 + last 5
         self.assertEqual(pages[:15], list(range(15)))
         self.assertEqual(pages[-5:], list(range(95, 100)))
         self.assertEqual(len(pages), 20)
@@ -250,8 +249,9 @@ class TestGenerateCitation(unittest.TestCase):
 
     def test_gb7714_single_author(self):
         meta = {"author_from_meta": "张三", "title_from_meta": "人工智能导论", "filename": "x.pdf", "format": "pdf"}
-        self.assertIn("张三", generate_citation(meta, "gb7714"))
-        self.assertIn("人工智能导论", generate_citation(meta, "gb7714"))
+        cite = generate_citation(meta, "gb7714")
+        self.assertIn("张三", cite)
+        self.assertIn("人工智能导论", cite)
 
     def test_gb7714_multiple_authors(self):
         meta = {"author_from_meta": "张三, 李四, 王五, 赵六", "title_from_meta": "深度学习", "filename": "x.pdf", "format": "pdf"}
@@ -259,25 +259,220 @@ class TestGenerateCitation(unittest.TestCase):
         self.assertIn("张三", cite)
         self.assertIn("等", cite)
 
+    def test_gb7714_with_journal(self):
+        meta = {
+            "author_from_meta": "张三",
+            "title_from_meta": "测试",
+            "filename": "x.pdf",
+            "format": "pdf",
+            "year": "2023",
+            "journal": "计算机学报",
+            "volume": "45",
+            "issue": "3",
+            "page_range": "120-130",
+        }
+        cite = generate_citation(meta, "gb7714")
+        self.assertIn("计算机学报", cite)
+        self.assertIn("2023", cite)
+        self.assertIn("45(3)", cite)
+        self.assertIn("120-130", cite)
+        self.assertNotIn("信息不完整", cite)
+
+    def test_gb7714_incomplete(self):
+        meta = {"author_from_meta": "张三", "title_from_meta": "测试", "filename": "x.pdf", "format": "pdf"}
+        cite = generate_citation(meta, "gb7714")
+        self.assertIn("信息不完整", cite)
+
     def test_apa(self):
         meta = {"author_from_meta": "John Smith", "title_from_meta": "AI Survey", "filename": "x.pdf", "format": "pdf"}
         cite = generate_citation(meta, "apa")
         self.assertIn("Smith", cite)
         self.assertIn("AI Survey", cite)
 
+    def test_apa_with_journal(self):
+        meta = {
+            "author_from_meta": "John Smith",
+            "title_from_meta": "AI Survey",
+            "filename": "x.pdf",
+            "format": "pdf",
+            "year": "2023",
+            "journal": "Nature",
+            "volume": "10",
+            "issue": "2",
+            "page_range": "1-10",
+        }
+        cite = generate_citation(meta, "apa")
+        self.assertIn("Smith", cite)
+        self.assertIn("(2023)", cite)
+        self.assertIn("*Nature*", cite)
+        self.assertIn("*10*(2)", cite)
+
     def test_mla(self):
         meta = {"author_from_meta": "John Smith", "title_from_meta": "AI Survey", "filename": "x.pdf", "format": "pdf"}
         cite = generate_citation(meta, "mla")
         self.assertIn('"AI Survey."', cite)
+        self.assertIn("Smith", cite)
 
     def test_numbered(self):
-        meta = {"author_from_meta": "", "title_from_meta": "Title", "filename": "x.pdf", "format": "pdf", "_citation_number": 5}
-        self.assertEqual(generate_citation(meta, "numbered"), "[5] Title")
+        meta = {"author_from_meta": "", "title_from_meta": "Title", "filename": "x.pdf", "format": "pdf", "_citation_number": 5, "year": "2023", "publisher": "Test Press"}
+        self.assertEqual(generate_citation(meta, "numbered"), "[5] Title, Test Press, 2023.")
 
     def test_no_author(self):
         meta = {"author_from_meta": "", "title_from_meta": "", "filename": "unknown.pdf", "format": "pdf"}
         cite = generate_citation(meta, "gb7714")
         self.assertIn("unknown.pdf", cite)
+
+    def test_apa_compound_surname(self):
+        meta = {"author_from_meta": "欧阳明", "title_from_meta": "测试", "filename": "x.pdf", "format": "pdf"}
+        cite = generate_citation(meta, "apa")
+        self.assertIn("欧阳", cite)
+
+    def test_mla_compound_surname(self):
+        meta = {"author_from_meta": "欧阳明", "title_from_meta": "测试", "filename": "x.pdf", "format": "pdf"}
+        cite = generate_citation(meta, "mla")
+        self.assertIn("欧阳, 明", cite)
+
+
+class TestSplitChineseName(unittest.TestCase):
+    """Tests for compound surname handling."""
+
+    def test_single_surname(self):
+        self.assertEqual(_split_chinese_name("张三"), ("张", "三"))
+
+    def test_compound_surname(self):
+        self.assertEqual(_split_chinese_name("欧阳明"), ("欧阳", "明"))
+
+    def test_compound_surname_long(self):
+        self.assertEqual(_split_chinese_name("司马相如"), ("司马", "相如"))
+
+    def test_empty(self):
+        self.assertEqual(_split_chinese_name(""), ("", ""))
+
+    def test_with_spaces(self):
+        self.assertEqual(_split_chinese_name("  张三  "), ("张", "三"))
+
+
+class TestExtractBibInfoFromText(unittest.TestCase):
+    """Tests for bibliographic metadata extraction from text."""
+
+    def test_doi_extraction(self):
+        text = "This paper is published with DOI: 10.1234/example.5678"
+        info = _extract_bib_info_from_text(text)
+        self.assertEqual(info["doi"], "10.1234/example.5678")
+
+    def test_volume_issue_english(self):
+        text = "Journal of AI, Vol. 12, No. 3, pp. 45-67"
+        info = _extract_bib_info_from_text(text)
+        self.assertEqual(info["volume"], "12")
+        self.assertEqual(info["issue"], "3")
+        self.assertEqual(info["page_range"], "45-67")
+
+    def test_chinese_volume_issue(self):
+        text = "发表于《计算机学报》第 15 卷第 2 期，第 100-120 页"
+        info = _extract_bib_info_from_text(text)
+        self.assertEqual(info["volume"], "15")
+        self.assertEqual(info["issue"], "2")
+        self.assertEqual(info["page_range"], "100-120")
+        self.assertEqual(info["journal"], "计算机学报")
+
+    def test_no_match(self):
+        info = _extract_bib_info_from_text("")
+        self.assertEqual(info["doi"], "")
+        self.assertEqual(info["journal"], "")
+
+    def test_journal_book_title(self):
+        text = "Published in 《自然语言处理》杂志"
+        info = _extract_bib_info_from_text(text)
+        self.assertEqual(info["journal"], "自然语言处理")
+
+
+class TestGuessDocType(unittest.TestCase):
+    """Tests for document type guessing."""
+
+    def test_short_pdf_is_journal(self):
+        self.assertEqual(_guess_doc_type({"format": "pdf", "pages": 10}), "J")
+
+    def test_long_pdf_is_monograph(self):
+        self.assertEqual(_guess_doc_type({"format": "pdf", "pages": 250}), "M")
+
+    def test_epub_is_monograph(self):
+        self.assertEqual(_guess_doc_type({"format": "epub", "pages": 50}), "M")
+
+
+class TestGuessBibtexType(unittest.TestCase):
+    """Tests for BibTeX entry type guessing."""
+
+    def test_with_journal(self):
+        self.assertEqual(_guess_bibtex_type({"journal": "Nature", "pages": 10}), "article")
+
+    def test_long_no_journal(self):
+        self.assertEqual(_guess_bibtex_type({"journal": "", "pages": 300}), "book")
+
+    def test_default_misc(self):
+        self.assertEqual(_guess_bibtex_type({"journal": "", "pages": 10}), "misc")
+
+
+class TestGenerateBibtex(unittest.TestCase):
+    """Tests for BibTeX generation."""
+
+    def test_single_entry(self):
+        results = [
+            {
+                "author_from_meta": "张三",
+                "title_from_meta": "测试标题",
+                "filename": "test.pdf",
+                "format": "pdf",
+                "year": "2023",
+                "journal": "计算机学报",
+                "volume": "45",
+                "issue": "3",
+                "page_range": "100-110",
+                "doi": "10.1234/test",
+            }
+        ]
+        bib = generate_bibtex(results)
+        self.assertIn("@article", bib)
+        self.assertIn("测试标题", bib)
+        self.assertIn("张三", bib)
+        self.assertIn("2023", bib)
+        self.assertIn("计算机学报", bib)
+        self.assertIn("10.1234/test", bib)
+
+    def test_incomplete_entry_has_note(self):
+        results = [
+            {
+                "author_from_meta": "",
+                "title_from_meta": "",
+                "filename": "unknown.pdf",
+                "format": "pdf",
+            }
+        ]
+        bib = generate_bibtex(results)
+        self.assertIn("文献信息不完整", bib)
+
+    def test_multiple_entries(self):
+        results = [
+            {"author_from_meta": "A", "title_from_meta": "T1", "filename": "a.pdf", "format": "pdf", "year": "2021"},
+            {"author_from_meta": "B", "title_from_meta": "T2", "filename": "b.pdf", "format": "pdf", "year": "2022"},
+        ]
+        bib = generate_bibtex(results)
+        self.assertEqual(bib.count("@"), 2)
+
+
+class TestSetupLogging(unittest.TestCase):
+    """Tests for logging setup."""
+
+    def test_verbose_sets_debug(self):
+        _setup_logging(verbose=True, quiet=False)
+        self.assertEqual(logging.getLogger().level, logging.DEBUG)
+
+    def test_quiet_sets_warning(self):
+        _setup_logging(verbose=False, quiet=True)
+        self.assertEqual(logging.getLogger().level, logging.WARNING)
+
+    def test_default_sets_info(self):
+        _setup_logging(verbose=False, quiet=False)
+        self.assertEqual(logging.getLogger().level, logging.INFO)
 
 
 class TestExtractTxt(unittest.TestCase):
@@ -301,7 +496,7 @@ class TestExtractTxt(unittest.TestCase):
             path = f.name
         try:
             info = extract_txt(path)
-            self.assertEqual(info["word_count"], 6)  # 6 Chinese chars
+            self.assertEqual(info["word_count"], 6)
             self.assertEqual(info["format"], "txt")
         finally:
             os.unlink(path)
@@ -357,23 +552,19 @@ class TestExtractPdf(unittest.TestCase):
             os.unlink(path)
 
     def test_short_pdf_reads_all_pages(self):
-        """Documents with <= 50 pages should have all pages sampled."""
         path = self._make_blank_pdf(20)
         try:
             info = extract_pdf(path)
             self.assertEqual(info["pages"], 20)
-            # Blank pages are flagged as scanned
             self.assertTrue(info["is_scanned"])
         finally:
             os.unlink(path)
 
     def test_long_pdf_samples_pages(self):
-        """Documents > 50 pages should sample first 15 + last 5."""
         path = self._make_blank_pdf(100)
         try:
             info = extract_pdf(path)
             self.assertEqual(info["pages"], 100)
-            # text_chars should be low because pages are blank
             self.assertEqual(info["text_chars"], 0)
         finally:
             os.unlink(path)
@@ -393,7 +584,6 @@ class TestExtractPdf(unittest.TestCase):
         try:
             info = extract_pdf(path, max_pages=5)
             self.assertEqual(info["pages"], 30)
-            # Only 5 pages read, but total_pages is still 30
             self.assertEqual(info["text_chars"], 0)
         finally:
             os.unlink(path)

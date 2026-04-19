@@ -27,8 +27,8 @@
   </tr>
   <tr>
     <td>1. 提取</td>
-    <td>脚本遍历文献文件夹提取元数据</td>
-    <td>JSON 报告 + Markdown 汇总（标题/作者/页数/字数/文本量/扫描检测）</td>
+    <td>脚本遍历文献文件夹提取元数据（支持子文件夹递归）</td>
+    <td>JSON 报告 + Markdown 汇总（标题/作者/页数/字数/期刊/卷期页/DOI/扫描检测）</td>
   </tr>
   <tr>
     <td>2. 聚类</td>
@@ -42,7 +42,7 @@
   </tr>
   <tr>
     <td>4. 撰写</td>
-    <td>按用户给定的章节框架输出</td>
+    <td>按用户给定的章节框架输出，引用格式符合学术规范</td>
     <td>格式化的绪论 + 文献综述草稿</td>
   </tr>
 </table>
@@ -69,7 +69,7 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 
 | 轮次 | Claude 做什么 | 你需要做什么 |
 |------|-------------|-------------|
-| 1 | 扫描文献文件夹，告诉你找到多少篇、什么格式、有没有扫描件 | 看结果，确认文献数量 |
+| 1 | 扫描文献文件夹（含子文件夹），告诉你找到多少篇、什么格式、有没有扫描件 | 看结果，确认文献数量 |
 | 2 | 问你：语言、引用格式、研究题目、章节结构模板 | 回答这 4 个问题 |
 | 3 | 做主题聚类，给你看分类和优先级（P0/P1/P2） | 确认分类，或说"把某篇移到 P0" |
 | 4 | 给你阅读计划：精读哪几篇、略读哪几篇 | 确认或调整阅读深度 |
@@ -82,13 +82,13 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 
 ### 支持格式矩阵
 
-| 格式 | 元数据提取 | pages | word_count | 扫描检测 | 依赖 |
-|------|-----------|-------|-----------|---------|------|
-| **PDF** | 标题、作者、页数、字数、文本量 | ✅ 真实页数 | ✅ 中英文混合智能统计 | ✅ 多页采样 | PyPDF2 + pdfplumber |
-| **DOCX** | 标题、作者、字数、文本量 | ✅ 估算（字数÷500） | ✅ 中英文混合智能统计 | ❌ 否 | python-docx |
-| **TXT / MD** | 字数、文本量 | ✅ 估算 | ✅ 中英文混合智能统计 | ❌ 否 | 内置 |
-| **EPUB** | 标题、作者、字数、文本量 | ✅ 估算 | ✅ 中英文混合智能统计 | ❌ 否 | ebooklib + beautifulsoup4 |
-| **CAJ** | 仅文件名 | ❌ | ❌ | N/A | 提示用户转为 PDF（CAJViewer / caj2pdf） |
+| 格式 | 元数据提取 | pages | word_count | 期刊/卷期页/DOI | 扫描检测 | 依赖 |
+|------|-----------|-------|-----------|----------------|---------|------|
+| **PDF** | 标题、作者、页数、字数、期刊、卷期页、DOI | ✅ 真实页数 | ✅ 中英文混合智能统计 | ✅ 首页正则探测 | ✅ 多页采样 | PyPDF2 + pdfplumber |
+| **DOCX** | 标题、作者、字数、期刊、卷期页 | ✅ 估算（字数÷500） | ✅ 中英文混合智能统计 | ✅ 前5000字符探测 | ❌ 否 | python-docx |
+| **TXT / MD** | 字数、期刊、卷期页 | ✅ 估算 | ✅ 中英文混合智能统计 | ✅ 前3000字符探测 | ❌ 否 | 内置 |
+| **EPUB** | 标题、作者、字数、期刊、卷期页 | ✅ 估算 | ✅ 中英文混合智能统计 | ✅ 前3000字符探测 | ❌ 否 | ebooklib + beautifulsoup4 |
+| **CAJ** | 仅文件名 | ❌ | ❌ | ❌ | N/A | 提示用户转为 PDF（CAJViewer / caj2pdf） |
 
 ### 性能与增量特性
 
@@ -99,8 +99,12 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 | **智能分页策略** | 短篇（≤50页）读全文，专著（>50页）采样前15+后5页 | 避免专著封面/目录误导扫描检测和字数统计 |
 | **多页采样扫描检测** | 采样 PDF 开头、中间、结尾页判断是否为扫描件 | 大幅降低封面图导致的误报 |
 | **重复文献检测** | 基于标题相似度（SequenceMatcher ≥80%）自动标记重复 | 避免同一文献多格式重复引用 |
-| **规范引用生成** | 支持 GB/T 7714、APA、MLA、编号四种格式自动生成 | 减少 Stage 4 引用格式不一致 |
+| **规范引用生成** | 支持 GB/T 7714、APA、MLA、编号四种格式，含期刊/卷期页/DOI | 引用可直接用于论文参考文献列表 |
+| **不完整引用标记** | 当期刊/出版社/年份缺失时，自动标注 `〔文献信息不完整，请手动补全〕` | 避免引用格式"形似神不似" |
+| **BibTeX 导出** | `--bibtex` 一键生成 `.bib` 文件，支持 `@article`/`@book`/`@misc` | LaTeX 用户刚需 |
+| **子文件夹递归** | 默认递归遍历所有子文件夹，保留相对路径结构 | 适合按主题/年份组织文献的用户 |
 | **结构化异常记录** | 提取失败时记录错误类型到报告备注栏 | 不再静默失败 |
+| **扫描件 OCR 指引** | 检测到扫描 PDF 时，报告内附 marker/nougat/tesseract 安装命令 | 用户知道下一步该做什么 |
 
 ### 真实数据闭环
 
@@ -137,6 +141,10 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 - `--max-pages N` / `-m N`：强制只读前 N 页（覆盖智能分页策略）
 - `--citation-style gb7714|apa|mla|numbered` / `-c STYLE`：选择引用格式（默认 gb7714）
 - `--output-dir PATH` / `-o PATH`：指定输出目录（默认在文献文件夹内创建 `.els_output/` 子目录）
+- `--bibtex` / `-b`：额外输出 BibTeX 文件 `_literature_references.bib`
+- `--verbose` / `-v`：DEBUG 级别日志输出
+- `--quiet` / `-q`：只输出 WARNING 及以上级别日志
+- `--no-recursive`：禁用子文件夹递归遍历
 
 支持交互式使用：
 - 不带参数 → 提示输入路径
@@ -145,9 +153,10 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 
 输出：
 - `_literature_extraction.json` — 结构化数据（含 `duplicates`、`citation_style`、`results[].citation`）
-- `_literature_report.md` — 人可读汇总报告（含重复检测、参考文献列表附录）
+- `_literature_report.md` — 人可读汇总报告（含重复检测、OCR 指引、按子文件夹分组、参考文献列表附录）
+- `_literature_references.bib` — BibTeX 文件（当使用 `--bibtex` 时）
 
-... 支持 PDF / DOCX / TXT / MD / EPUB 多格式混合文件夹
+... 支持 PDF / DOCX / TXT / MD / EPUB 多格式混合文件夹，含子文件夹递归
 
 **方式二：Claude Code Skill 自动触发**
 
@@ -173,7 +182,7 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 efficient-literature-survey/
 ├── SKILL.md                              # Claude 读取的核心 skill 文档（仅 Claude Code 有效）
 ├── extract_literature_metadata.py        # 独立批量提取脚本（任何 Python 环境可用）
-├── test_extract_literature_metadata.py # 单元测试（52 个用例）
+├── test_extract_literature_metadata.py # 单元测试（79 个用例）
 ├── CHANGELOG.md                        # 版本变更日志
 ├── README.md                           # 中文版本（本文件）
 └── README_EN.md                        # English version
@@ -182,7 +191,7 @@ efficient-literature-survey/
 ### 为什么能省 Token
 
 | 方式 | 阅读量 | 阅读深度 | 产出质量 |
-|------|--------|----------|----------|
+|------|--------|----------|---------|
 | 全文通读 | 500 万+ 字符 | 浅（上下文溢出） | 低 |
 | **本工作流** | **~3 万字符** | **深（定向摘录）** | **高** |
 

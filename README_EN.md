@@ -23,8 +23,8 @@ Supports **custom chapter structures** or **default templates** (Chinese / Engli
   </tr>
   <tr>
     <td>1. Extract</td>
-    <td>Script extracts metadata from all literature files</td>
-    <td>JSON report + Markdown summary (titles/authors/pages/word count/text volume/scan detection)</td>
+    <td>Script extracts metadata from all literature files (recursive subfolder support)</td>
+    <td>JSON report + Markdown summary (titles/authors/pages/word count/journal/vol/issue/pages/DOI/scan detection)</td>
   </tr>
   <tr>
     <td>2. Cluster</td>
@@ -38,7 +38,7 @@ Supports **custom chapter structures** or **default templates** (Chinese / Engli
   </tr>
   <tr>
     <td>4. Write</td>
-    <td>Write according to user's chapter framework</td>
+    <td>Write according to user's chapter framework, with academically-compliant citations</td>
     <td>Formatted introduction + review draft</td>
   </tr>
 </table>
@@ -65,7 +65,7 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 
 | Turn | What Claude Does | What You Do |
 |------|-----------------|-------------|
-| 1 | Scans the folder, tells you how many files, what formats, any scanned PDFs | Check the count, confirm |
+| 1 | Scans the folder (including subfolders), tells you how many files, what formats, any scanned PDFs | Check the count, confirm |
 | 2 | Asks: language, citation style, research topic, chapter structure template | Answer the 4 questions |
 | 3 | Clusters references by theme, shows the map with priorities (P0/P1/P2) | Confirm or say "move [file] to P0" |
 | 4 | Shows reading plan: which to read fully, which to skim | Confirm or adjust reading depth |
@@ -78,13 +78,13 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 
 ### Supported Formats Matrix
 
-| Format | Metadata Extracted | pages | word_count | Scan Detection | Dependencies |
-|--------|-------------------|-------|-----------|----------------|--------------|
-| **PDF** | Title, author, pages, word count, text volume | ✅ Real page count | ✅ Smart CJK/English mixed counting | ✅ Multi-page sampling | PyPDF2 + pdfplumber |
-| **DOCX** | Title, author, word count, text volume | ✅ Estimated (chars÷500) | ✅ Smart CJK/English mixed counting | ❌ No | python-docx |
-| **TXT / MD** | Word count, text volume | ✅ Estimated | ✅ Smart CJK/English mixed counting | ❌ No | Built-in |
-| **EPUB** | Title, author, word count, text volume | ✅ Estimated | ✅ Smart CJK/English mixed counting | ❌ No | ebooklib + beautifulsoup4 |
-| **CAJ** | Filename only | ❌ | ❌ | N/A | Prompts user to convert to PDF (CAJViewer / caj2pdf) |
+| Format | Metadata Extracted | pages | word_count | Journal/Vol/Issue/Pages/DOI | Scan Detection | Dependencies |
+|--------|-------------------|-------|-----------|---------------------------|----------------|--------------|
+| **PDF** | Title, author, pages, word count, journal, vol/issue/pages, DOI | ✅ Real page count | ✅ Smart CJK/English mixed counting | ✅ First-page regex heuristics | ✅ Multi-page sampling | PyPDF2 + pdfplumber |
+| **DOCX** | Title, author, word count, journal, vol/issue | ✅ Estimated (chars÷500) | ✅ Smart CJK/English mixed counting | ✅ First 5000 chars heuristics | ❌ No | python-docx |
+| **TXT / MD** | Word count, journal, vol/issue | ✅ Estimated | ✅ Smart CJK/English mixed counting | ✅ First 3000 chars heuristics | ❌ No | Built-in |
+| **EPUB** | Title, author, word count, journal, vol/issue | ✅ Estimated | ✅ Smart CJK/English mixed counting | ✅ First 3000 chars heuristics | ❌ No | ebooklib + beautifulsoup4 |
+| **CAJ** | Filename only | ❌ | ❌ | ❌ | N/A | Prompts user to convert to PDF (CAJViewer / caj2pdf) |
 
 ### Performance & Incremental Features
 
@@ -95,8 +95,12 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 | **Smart page-reading strategy** | Short docs (≤50 pages) read fully; monographs (>50 pages) sample first 15 + last 5 | Avoids front-matter bias on monographs for scan detection and word counts |
 | **Multi-page scan detection** | Samples beginning, middle, and end pages of PDFs | Greatly reduces false positives from image-only cover pages |
 | **Duplicate detection** | Auto-flags duplicate references by title similarity (SequenceMatcher ≥80%) | Prevents multi-format duplicates from being cited twice |
-| **Citation generation** | Auto-generates citations in GB/T 7714, APA, MLA, and numbered styles | Reduces citation-format inconsistency in Stage 4 |
+| **Citation generation** | Auto-generates citations in GB/T 7714, APA, MLA, and numbered styles with journal/vol/issue/pages/DOI | Citations are ready for a real reference list |
+| **Incomplete citation marker** | Automatically appends `〔文献信息不完整，请手动补全〕` when journal/publisher/year is missing | Prevents "looks right but is wrong" citations |
+| **BibTeX export** | `--bibtex` outputs a `.bib` file with `@article`/`@book`/`@misc` auto-inference | Essential for LaTeX users |
+| **Recursive traversal** | Default `rglob("*")` discovers files in subfolders with `relative_path` preserved | Fits users who organize by topic/year |
 | **Structured error logging** | Extraction failures are recorded in report notes | No more silent failures |
+| **Scanned PDF guidance** | Report includes specific OCR tool recommendations (marker, nougat, tesseract) with install commands | Users know exactly what to do next |
 
 ### Real-World Results
 
@@ -131,6 +135,10 @@ CLI flags:
 - `--max-pages N` / `-m N`: Force read only the first N pages (overrides smart paging)
 - `--citation-style gb7714|apa|mla|numbered` / `-c STYLE`: Choose citation format (default: gb7714)
 - `--output-dir PATH` / `-o PATH`: Specify output directory (default: `.els_output/` subfolder inside the literature folder)
+- `--bibtex` / `-b`: Also output a BibTeX file `_literature_references.bib`
+- `--verbose` / `-v`: DEBUG-level logging
+- `--quiet` / `-q`: Only WARNING and above
+- `--no-recursive`: Disable subfolder traversal
 
 Interactive CLI features:
 - No arguments → prompts for path interactively
@@ -139,9 +147,10 @@ Interactive CLI features:
 
 Outputs:
 - `_literature_extraction.json` — structured data (includes `duplicates`, `citation_style`, `results[].citation`)
-- `_literature_report.md` — human-readable summary report (includes duplicate detection and citation appendix)
+- `_literature_report.md` — human-readable summary report (includes duplicate detection, OCR guidance, subfolder grouping, citation appendix)
+- `_literature_references.bib` — BibTeX file (when `--bibtex` is used)
 
-... Supports mixed folders of PDF / DOCX / TXT / MD / EPUB
+... Supports mixed folders of PDF / DOCX / TXT / MD / EPUB, including recursive subfolders
 
 **Via Claude Code Skill:**
 
@@ -167,7 +176,7 @@ If you don't use Claude Code, you can still use the **Python script standalone**
 efficient-literature-survey/
 ├── SKILL.md                              # Core skill document for Claude (Claude Code only)
 ├── extract_literature_metadata.py        # Standalone batch extraction script (any Python env)
-├── test_extract_literature_metadata.py # Unit tests (52 test cases)
+├── test_extract_literature_metadata.py # Unit tests (79 test cases)
 ├── CHANGELOG.md                        # Version changelog
 ├── README.md                           # Chinese version
 └── README_EN.md                        # English version (this file)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Batch-extract metadata from a folder of literature files (PDF, DOCX, TXT, MD, EPUB).
-Outputs a structured report with title, author, page/word count, text volume,
-and scanned-image detection (PDF only).
+Outputs a structured report with title, author, year, page/word count, text volume,
+scanned-image detection (PDF only), and formatted citations.
 
 Usage:
     python extract_literature_metadata.py /path/to/literature/folder
@@ -14,6 +14,7 @@ Dependencies:
 import difflib
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -21,6 +22,119 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+def _setup_logging(verbose: bool = False, quiet: bool = False) -> None:
+    if quiet:
+        level = logging.WARNING
+    elif verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+    root = logging.getLogger()
+    root.setLevel(level)
+    if not root.handlers:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Chinese compound surnames (复姓)
+# ---------------------------------------------------------------------------
+
+_COMPOUND_SURNAMES = {
+    "欧阳", "司马", "诸葛", "上官", "皇甫", "令狐", "公孙", "慕容",
+    "司徒", "司空", "长孙", "尉迟", "达奚", "赫连", "拓跋", "独孤",
+    "完颜", "耶律", "宇文", "澹台", "贺兰", "纳兰", "呼延", "西门",
+    "南宫", "东郭", "百里", "端木", "壤驷", "公良", "宰父", "谷梁",
+}
+
+
+def _split_chinese_name(name: str) -> tuple[str, str]:
+    """Split a Chinese name into surname and given name, handling compound surnames."""
+    name = name.strip().replace(" ", "")
+    if not name:
+        return ("", "")
+    for cs in _COMPOUND_SURNAMES:
+        if name.startswith(cs):
+            return (cs, name[len(cs):])
+    return (name[0], name[1:])
+
+
+# ---------------------------------------------------------------------------
+# Bibliographic metadata extraction from text
+# ---------------------------------------------------------------------------
+
+def _extract_bib_info_from_text(text: str) -> dict:
+    """
+    Attempt to extract journal/publisher/volume/issue/pages/year from the
+    first page / front matter text using heuristic regexes.
+    """
+    info = {
+        "journal": "",
+        "publisher": "",
+        "volume": "",
+        "issue": "",
+        "page_range": "",
+        "doi": "",
+    }
+    if not text:
+        return info
+
+    # DOI
+    doi_match = re.search(
+        r'\b(10\.\d{4,}(?:\.\d+)*/[^\s"<>]+)', text, re.IGNORECASE
+    )
+    if doi_match:
+        info["doi"] = doi_match.group(1)
+
+    # Volume / Issue – English patterns
+    vol_match = re.search(
+        r'(?:Vol\.?|Volume)\s*(\d+)(?:\s*[,:]?\s*(?:No\.?|Issue|#)\s*(\d+))?', text, re.IGNORECASE
+    )
+    if vol_match:
+        info["volume"] = vol_match.group(1)
+        if vol_match.group(2):
+            info["issue"] = vol_match.group(2)
+
+    # Pages – English patterns: pp. 123-145, p. 123, 123–145
+    page_match = re.search(r'(?:pp?\.?\s*)?(\d+)[\s–—-]+(\d+)', text)
+    if page_match:
+        info["page_range"] = f"{page_match.group(1)}-{page_match.group(2)}"
+
+    # Volume / Issue / Pages – Chinese patterns
+    cn_vol = re.search(r'第\s*(\d+)\s*卷', text)
+    cn_issue = re.search(r'第\s*(\d+)\s*期', text)
+    cn_page = re.search(r'第\s*(\d+)\s*[—–~\-]\s*(\d+)\s*页', text)
+    if cn_vol:
+        info["volume"] = cn_vol.group(1)
+    if cn_issue:
+        info["issue"] = cn_issue.group(1)
+    if cn_page:
+        info["page_range"] = f"{cn_page.group(1)}-{cn_page.group(2)}"
+
+    # Journal / Publisher heuristics
+    # Common Chinese journal markers
+    cn_journal = re.search(r'《([^》]{3,50})》', text)
+    if cn_journal:
+        info["journal"] = cn_journal.group(1).strip()
+
+    # Try to grab a line that looks like a journal header (all caps, short)
+    for line in text.splitlines()[:15]:
+        line = line.strip()
+        if 10 < len(line) < 80 and line.isupper() and line.replace(" ", "").isalpha():
+            if not info["journal"]:
+                info["journal"] = line.title()
+            break
+
+    return info
 
 
 # ---------------------------------------------------------------------------
@@ -44,13 +158,8 @@ def _smart_word_count(text: str) -> int:
     """
     if not text:
         return 0
-    # Chinese characters (CJK Unified Ideographs + extensions)
     cn_chars = re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f]', text)
-    # English words: tokens with at least one letter
     en_tokens = re.findall(r'\b[a-zA-Z]+\b', text)
-    # For non-CJK languages, also count numeric tokens and other space-separated words
-    # Pure CJK text should not count space splits, so only count en_tokens + cn_chars
-    # If text has very few CJK chars, supplement with simple split to catch non-English e.g. German, French
     if len(cn_chars) == 0:
         return len(text.split())
     return len(cn_chars) + len(en_tokens)
@@ -67,13 +176,11 @@ def _detect_scanned_pdf(read_page_texts: list[str], total_pages: int) -> bool:
 
     total_chars = sum(len(t) for t in read_page_texts)
 
-    # Fast path: very high text volume = definitely not scanned
     if total_chars > 8000:
         return False
 
     read_count = len(read_page_texts)
 
-    # Sample pages at beginning, middle, and end of the READ pages
     indices = [0]
     if read_count > 3:
         mid = read_count // 2
@@ -87,16 +194,13 @@ def _detect_scanned_pdf(read_page_texts: list[str], total_pages: int) -> bool:
     sampled = [read_page_texts[i] for i in indices if i < read_count]
     empty_samples = sum(1 for t in sampled if len(t.strip()) < 25)
 
-    # If majority of sampled pages are nearly empty, likely scanned
     if len(sampled) >= 2 and empty_samples / len(sampled) >= 0.66:
         return True
 
-    # Fallback: very low text density across all read pages
     density = total_chars / read_count if read_count > 0 else 0
     if density < 12 and read_count > 3:
         return True
 
-    # Extra fallback: original single-threshold for short docs
     if total_chars < 50:
         return True
 
@@ -117,7 +221,6 @@ def _get_pdf_read_pages(total_pages: int, max_pages: int = 0) -> list[int]:
         return list(range(min(total_pages, max_pages)))
     if total_pages <= 50:
         return list(range(total_pages))
-    # Monograph strategy
     pages = list(range(min(15, total_pages)))
     pages.extend(range(max(0, total_pages - 5), total_pages))
     return sorted(set(pages))
@@ -149,7 +252,6 @@ def _find_duplicates(results: list[dict], threshold: float = 0.80) -> dict[str, 
                 fj = results[j]["filename"]
                 dups.setdefault(fi, []).append(f"{fj} (相似度 {ratio:.0%})")
                 dups.setdefault(fj, []).append(f"{fi} (相似度 {ratio:.0%})")
-    # deduplicate values
     for k in dups:
         seen = set()
         uniq = []
@@ -169,9 +271,20 @@ def _normalize_author(author_raw: str) -> list[str]:
     """Split author string into individual names."""
     if not author_raw:
         return []
-    # Split on common separators
     parts = re.split(r"[,;，；/&]", author_raw)
     return [p.strip() for p in parts if p.strip()]
+
+
+def _guess_doc_type(metadata: dict) -> str:
+    """Guess document type code for GB/T 7714."""
+    fmt = metadata.get("format", "").lower()
+    pages = metadata.get("pages", 0)
+    # Heuristic: >200 pages likely monograph/book; otherwise article
+    if pages > 200:
+        return "M"  # Monograph
+    if fmt == "epub":
+        return "M"
+    return "J"  # Default to journal article
 
 
 def generate_citation(metadata: dict, style: str = "numbered") -> str:
@@ -183,57 +296,146 @@ def generate_citation(metadata: dict, style: str = "numbered") -> str:
       - "apa"      : APA 7th edition (simplified)
       - "mla"      : MLA 9th edition (simplified)
       - "numbered" : [N] numeric citation
+
+    Missing fields are omitted (not fabricated).  When critical fields
+    are missing, a trailing notice is appended.
     """
     title = (metadata.get("title_from_meta") or metadata.get("filename", "")).strip()
     author_raw = metadata.get("author_from_meta", "").strip()
     authors = _normalize_author(author_raw)
-    fmt = metadata.get("format", "").upper()
-
     year = metadata.get("year", "")
-    year_part = f", {year}" if year else ""
+    journal = metadata.get("journal", "")
+    publisher = metadata.get("publisher", "")
+    volume = metadata.get("volume", "")
+    issue = metadata.get("issue", "")
+    page_range = metadata.get("page_range", "")
+    doi = metadata.get("doi", "")
+    doc_type = _guess_doc_type(metadata)
+
+    incomplete = False
+    # Critical missing fields check
+    if not year or (not journal and not publisher and doc_type == "J"):
+        incomplete = True
+
+    def _author_str_gb(authors_list: list[str]) -> str:
+        if not authors_list:
+            return "佚名"
+        if len(authors_list) == 1:
+            return authors_list[0]
+        if len(authors_list) == 2:
+            return f"{authors_list[0]}, {authors_list[1]}"
+        if len(authors_list) == 3:
+            return f"{authors_list[0]}, {authors_list[1]}, {authors_list[2]}"
+        return f"{authors_list[0]} 等"
+
+    def _author_str_apa(authors_list: list[str]) -> str:
+        if not authors_list:
+            return "Anonymous"
+        if len(authors_list) == 1:
+            return _apa_name(authors_list[0])
+        if len(authors_list) == 2:
+            return f"{_apa_name(authors_list[0])} & {_apa_name(authors_list[1])}"
+        return f"{_apa_name(authors_list[0])} et al."
+
+    def _author_str_mla(authors_list: list[str]) -> str:
+        if not authors_list:
+            return "Anonymous"
+        first = _mla_name(authors_list[0])
+        if len(authors_list) > 1:
+            return f"{first}, et al."
+        return first
+
+    parts: list[str] = []
 
     if style == "gb7714":
-        if not authors:
-            author_str = "佚名"
-        elif len(authors) == 1:
-            author_str = authors[0]
-        elif len(authors) == 2:
-            author_str = f"{authors[0]}, {authors[1]}"
-        elif len(authors) == 3:
-            author_str = f"{authors[0]}, {authors[1]}, {authors[2]}"
-        else:
-            author_str = f"{authors[0]} 等"
-        return f"[{author_str}]. {title}[{fmt}]{year_part}."
+        author_str = _author_str_gb(authors)
+        parts.append(f"[{author_str}]. {title}[{doc_type}]")
+        if publisher:
+            parts.append(publisher)
+        elif journal:
+            parts.append(journal)
+        if year:
+            parts.append(year)
+        if volume:
+            vi = f"{volume}"
+            if issue:
+                vi += f"({issue})"
+            parts.append(vi)
+        if page_range:
+            parts.append(f": {page_range}")
+        if doi:
+            parts.append(f". DOI:{doi}")
+        citation = ". ".join(parts)
+        if citation.endswith("."):
+            citation = citation[:-1]
+        citation += "."
 
-    if style == "apa":
-        if not authors:
-            author_str = "Anonymous"
-        elif len(authors) == 1:
-            author_str = _apa_name(authors[0])
-        elif len(authors) == 2:
-            author_str = f"{_apa_name(authors[0])} & {_apa_name(authors[1])}"
-        else:
-            author_str = f"{_apa_name(authors[0])} et al."
-        return f"{author_str}{year_part}. {title}."
+    elif style == "apa":
+        author_str = _author_str_apa(authors)
+        year_part = f" ({year})" if year else ""
+        citation = f"{author_str}{year_part}. {title}."
+        if journal:
+            citation += f" *{journal}*"
+            if volume:
+                citation += f", *{volume}*"
+                if issue:
+                    citation += f"({issue})"
+            if page_range:
+                citation += f", {page_range}"
+            citation += "."
+        elif publisher:
+            citation += f" {publisher}."
+        if doi:
+            citation += f" https://doi.org/{doi}"
 
-    if style == "mla":
-        if not authors:
-            author_str = "Anonymous"
+    elif style == "mla":
+        author_str = _author_str_mla(authors)
+        citation = f'"{title}." '
+        if journal:
+            citation += f"*{journal}*, "
+            if volume:
+                citation += f"vol. {volume}, "
+            if issue:
+                citation += f"no. {issue}, "
+        if year:
+            citation += f"{year}, "
+        if page_range:
+            citation += f"pp. {page_range}."
         else:
-            author_str = _mla_name(authors[0])
-            if len(authors) > 1:
-                author_str += f", et al."
-        return f'"{title}." {author_str}{year_part}.'
+            citation = citation.rstrip(", ") + "."
+        citation = f"{author_str}. {citation}"
 
-    # default numbered
-    return f"[{metadata.get('_citation_number', '')}] {title}"
+    else:  # numbered
+        num = metadata.get("_citation_number", "")
+        prefix = f"[{num}] " if num else ""
+        parts: list[str] = []
+        if authors:
+            parts.append(authors[0] + (" 等" if len(authors) > 1 else ""))
+        parts.append(title)
+        if journal:
+            parts.append(f"《{journal}》")
+        elif publisher:
+            parts.append(publisher)
+        if year:
+            parts.append(year)
+        citation = prefix + ", ".join([p for p in parts if p])
+        citation += "."
+
+    if incomplete:
+        citation += " 〔文献信息不完整，请手动补全〕"
+    return citation
 
 
 def _apa_name(name: str) -> str:
     """Convert 'Zhang San' or 'San Zhang' to APA-style 'Zhang, S.' heuristic."""
+    name = name.strip()
+    if any('\u4e00' <= c <= '\u9fff' for c in name):
+        surname, given = _split_chinese_name(name)
+        if surname:
+            given_initials = "".join(f"{g[0]}." for g in given if g)
+            return f"{surname}, {given_initials}"
     parts = name.split()
     if len(parts) >= 2 and len(parts[-1]) == 1:
-        # Likely 'San Z.' format
         return f"{parts[-1]}, {''.join(p[0] + '.' for p in parts[:-1])}"
     if len(parts) >= 2:
         return f"{parts[-1]}, {parts[0][0]}."
@@ -242,10 +444,70 @@ def _apa_name(name: str) -> str:
 
 def _mla_name(name: str) -> str:
     """Convert name to MLA-style 'Last, First' heuristic."""
+    name = name.strip()
+    if any('\u4e00' <= c <= '\u9fff' for c in name):
+        surname, given = _split_chinese_name(name)
+        if surname:
+            return f"{surname}, {given}"
     parts = name.split()
     if len(parts) >= 2:
         return f"{parts[-1]}, {parts[0]}"
     return name
+
+
+# ---------------------------------------------------------------------------
+# BibTeX generation
+# ---------------------------------------------------------------------------
+
+def _guess_bibtex_type(metadata: dict) -> str:
+    """Map metadata to a BibTeX entry type."""
+    fmt = metadata.get("format", "").lower()
+    pages = metadata.get("pages", 0)
+    journal = metadata.get("journal", "")
+    if journal:
+        return "article"
+    if pages > 200 or fmt == "epub":
+        return "book"
+    return "misc"
+
+
+def _bibtex_escape(s: str) -> str:
+    return s.replace("{", "\\{").replace("}", "\\}").replace("&", "\\&")
+
+
+def generate_bibtex(results: list[dict]) -> str:
+    """Generate a .bib file from extracted metadata."""
+    lines: list[str] = []
+    for idx, r in enumerate(results, start=1):
+        entry_type = _guess_bibtex_type(r)
+        citekey = re.sub(r"[^a-zA-Z0-9]", "", (r.get("author_from_meta") or "Unknown").split(",")[0].split(" ")[0])
+        citekey = citekey or "Unknown"
+        year = r.get("year", "")
+        citekey = f"{citekey}{year}{idx}"
+        lines.append(f"@{entry_type}{{{citekey},")
+        lines.append(f"  title = {{{_bibtex_escape(r.get('title_from_meta', r['filename']))}}},")
+        authors = _normalize_author(r.get("author_from_meta", ""))
+        if authors:
+            lines.append(f"  author = {{{_bibtex_escape(' and '.join(authors))}}},")
+        if year:
+            lines.append(f"  year = {{{year}}},")
+        if r.get("journal"):
+            lines.append(f"  journal = {{{_bibtex_escape(r['journal'])}}},")
+        if r.get("publisher"):
+            lines.append(f"  publisher = {{{_bibtex_escape(r['publisher'])}}},")
+        if r.get("volume"):
+            lines.append(f"  volume = {{{r['volume']}}},")
+        if r.get("issue"):
+            lines.append(f"  number = {{{r['issue']}}},")
+        if r.get("page_range"):
+            lines.append(f"  pages = {{{r['page_range']}}},")
+        if r.get("doi"):
+            lines.append(f"  doi = {{{r['doi']}}},")
+        if not r.get("journal") and not r.get("publisher"):
+            lines.append("  note = {文献信息不完整，请手动补全},")
+        lines.append("}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +551,7 @@ def _save_cache(cache_path: Path, cache_data: dict) -> None:
         with open(cache_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"  [WARN] 缓存保存失败：{e}")
+        logging.warning("缓存保存失败：%s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +591,7 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
     """Extract metadata and text sample from a single PDF."""
     result = {
         "filename": os.path.basename(pdf_path),
+        "relative_path": "",
         "format": "pdf",
         "pages": 0,
         "word_count": 0,
@@ -337,6 +600,13 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
         "is_scanned": False,
         "author_from_meta": "",
         "title_from_meta": "",
+        "year": "",
+        "journal": "",
+        "publisher": "",
+        "volume": "",
+        "issue": "",
+        "page_range": "",
+        "doi": "",
         "note": "",
     }
 
@@ -348,7 +618,6 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
         if meta:
             result["author_from_meta"] = str(meta.get("/Author", ""))
             result["title_from_meta"] = str(meta.get("/Title", ""))
-            # Extract year from /CreationDate (e.g., D:20240115120000Z)
             creation_date = str(meta.get("/CreationDate", ""))
             m = re.search(r'D:(\d{4})', creation_date)
             if m:
@@ -399,13 +668,16 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
 
     result["word_count"] = _smart_word_count(total_text) if result["text_chars"] > 0 else 0
 
+    # Extract bibliographic info from first-page text
+    bib_info = _extract_bib_info_from_text(result["first_page_text"])
+    result.update(bib_info)
+
     # Fallback: extract year from filename if not found in metadata
     if not result.get("year"):
         m = re.search(r'\b(19|20)\d{2}\b', result["filename"])
         if m:
             result["year"] = m.group(0)
 
-    # Scanned-image detection heuristic (PDF only) — multi-page sampling on READ pages only
     result["is_scanned"] = _detect_scanned_pdf(read_page_texts, result["pages"])
 
     return result
@@ -415,6 +687,7 @@ def extract_docx(docx_path: str) -> dict:
     """Extract metadata and text sample from a DOCX file."""
     result = {
         "filename": os.path.basename(docx_path),
+        "relative_path": "",
         "format": "docx",
         "pages": 0,
         "word_count": 0,
@@ -423,6 +696,13 @@ def extract_docx(docx_path: str) -> dict:
         "is_scanned": False,
         "author_from_meta": "",
         "title_from_meta": "",
+        "year": "",
+        "journal": "",
+        "publisher": "",
+        "volume": "",
+        "issue": "",
+        "page_range": "",
+        "doi": "",
         "note": "",
     }
 
@@ -457,6 +737,10 @@ def extract_docx(docx_path: str) -> dict:
             table_full = "\n".join(table_texts)
             result["word_count"] += _smart_word_count(table_full)
 
+        # Try to extract bibliographic info from front matter
+        bib_info = _extract_bib_info_from_text(full_text)
+        result.update(bib_info)
+
     except Exception as e:
         result["note"] = f"DOCX extraction error: {e}"
 
@@ -467,6 +751,7 @@ def extract_txt(txt_path: str) -> dict:
     """Extract text sample from a plain-text file (TXT or MD)."""
     result = {
         "filename": os.path.basename(txt_path),
+        "relative_path": "",
         "format": Path(txt_path).suffix.lower().lstrip("."),
         "pages": 0,
         "word_count": 0,
@@ -475,6 +760,13 @@ def extract_txt(txt_path: str) -> dict:
         "is_scanned": False,
         "author_from_meta": "",
         "title_from_meta": "",
+        "year": "",
+        "journal": "",
+        "publisher": "",
+        "volume": "",
+        "issue": "",
+        "page_range": "",
+        "doi": "",
         "note": "",
     }
 
@@ -497,6 +789,10 @@ def extract_txt(txt_path: str) -> dict:
     result["first_page_text"] = _safe_truncate(content)
     result["pages"] = _estimate_pages_from_chars(result["text_chars"])
 
+    # Try to extract bibliographic info
+    bib_info = _extract_bib_info_from_text(content[:3000])
+    result.update(bib_info)
+
     return result
 
 
@@ -504,6 +800,7 @@ def extract_epub(epub_path: str) -> dict:
     """Extract metadata and text sample from an EPUB file."""
     result = {
         "filename": os.path.basename(epub_path),
+        "relative_path": "",
         "format": "epub",
         "pages": 0,
         "word_count": 0,
@@ -512,6 +809,13 @@ def extract_epub(epub_path: str) -> dict:
         "is_scanned": False,
         "author_from_meta": "",
         "title_from_meta": "",
+        "year": "",
+        "journal": "",
+        "publisher": "",
+        "volume": "",
+        "issue": "",
+        "page_range": "",
+        "doi": "",
         "note": "",
     }
 
@@ -547,6 +851,9 @@ def extract_epub(epub_path: str) -> dict:
         result["first_page_text"] = _safe_truncate(full_text)
         result["pages"] = _estimate_pages_from_chars(result["text_chars"])
 
+        bib_info = _extract_bib_info_from_text(full_text[:3000])
+        result.update(bib_info)
+
     except ImportError:
         result["note"] = "Missing dependency: pip install ebooklib beautifulsoup4"
     except Exception as e:
@@ -579,6 +886,7 @@ def extract_info(file_path: str, max_pages: int = 0) -> dict:
     if ext in CAJ_EXT:
         return {
             "filename": os.path.basename(file_path),
+            "relative_path": "",
             "format": "caj",
             "pages": 0,
             "word_count": 0,
@@ -587,11 +895,19 @@ def extract_info(file_path: str, max_pages: int = 0) -> dict:
             "is_scanned": False,
             "author_from_meta": "",
             "title_from_meta": "",
+            "year": "",
+            "journal": "",
+            "publisher": "",
+            "volume": "",
+            "issue": "",
+            "page_range": "",
+            "doi": "",
             "note": "CAJ format is not directly supported. Please convert to PDF using CAJViewer or caj2pdf first.",
         }
 
     return {
         "filename": os.path.basename(file_path),
+        "relative_path": "",
         "format": ext.lstrip("."),
         "pages": 0,
         "word_count": 0,
@@ -600,6 +916,13 @@ def extract_info(file_path: str, max_pages: int = 0) -> dict:
         "is_scanned": False,
         "author_from_meta": "",
         "title_from_meta": "",
+        "year": "",
+        "journal": "",
+        "publisher": "",
+        "volume": "",
+        "issue": "",
+        "page_range": "",
+        "doi": "",
         "note": f"Unsupported file format: {ext}",
     }
 
@@ -607,6 +930,15 @@ def extract_info(file_path: str, max_pages: int = 0) -> dict:
 # ---------------------------------------------------------------------------
 # Markdown report generator
 # ---------------------------------------------------------------------------
+
+_OCR_GUIDANCE = """
+> **处理建议**：以下工具可将其转换为可提取文本的 PDF
+> - **marker**（推荐，GPU 快、排版保留好）：`pip install marker-pdf && marker_single <文件>`
+> - **nougat**（学术 PDF 专用）：`pip install nougat-ocr && nougat <文件>`
+> - **pdf2image + pytesseract**（CPU 可用）：`pip install pdf2image pytesseract`，然后逐页 OCR
+> - 转换完成后，重新运行本脚本以获取完整元数据。
+"""
+
 
 def generate_markdown_report(
     results: list,
@@ -619,9 +951,13 @@ def generate_markdown_report(
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     scanned = [r for r in results if r["is_scanned"]]
     by_format = {}
+    by_subdir: dict[str, list] = {}
     for r in results:
         fmt = r["format"]
         by_format.setdefault(fmt, []).append(r)
+        subdir = str(Path(r.get("relative_path", "")).parent)
+        if subdir and subdir != ".":
+            by_subdir.setdefault(subdir, []).append(r)
 
     total_pages = sum(r["pages"] for r in results)
     total_words = sum(r["word_count"] for r in results)
@@ -652,6 +988,8 @@ def generate_markdown_report(
         for r in scanned:
             lines.append(f"| {r['filename']} | {r['pages']} | 扫描 PDF，无法直接提取全文 |")
         lines.append("")
+        lines.append(_OCR_GUIDANCE)
+        lines.append("")
 
     if duplicates:
         lines.extend([
@@ -662,6 +1000,27 @@ def generate_markdown_report(
         for fname, dlist in sorted(duplicates.items()):
             lines.append(f"| {fname} | {'; '.join(dlist)} |")
         lines.append("")
+
+    # Group by subfolder if any
+    if by_subdir:
+        lines.extend(["## 按子文件夹分组\n"])
+        for subdir, items in sorted(by_subdir.items()):
+            lines.append(f"### {subdir} ({len(items)} 篇)\n")
+            lines.append("| 文件名 | 格式 | 页数 | 字数 | 作者 | 标题 | 备注 |")
+            lines.append("|--------|------|------|------|------|------|------|")
+            for r in sorted(items, key=lambda x: x["filename"].lower()):
+                author = r["author_from_meta"] or "—"
+                title = r["title_from_meta"] or "—"
+                note = r["note"] or "—"
+                if len(title) > 40:
+                    title = title[:37] + "..."
+                if len(author) > 30:
+                    author = author[:27] + "..."
+                lines.append(
+                    f"| {r['filename']} | {r['format']} | {r['pages']} | {r['word_count']} | "
+                    f"{author} | {title} | {note} |"
+                )
+            lines.append("")
 
     lines.extend([
         "## 文献详情（按文件名排序）\n",
@@ -683,7 +1042,6 @@ def generate_markdown_report(
         )
     lines.append("")
 
-    # Citation list
     lines.extend([
         f"## 参考文献列表（{citation_style.upper()} 格式）\n",
     ])
@@ -725,6 +1083,10 @@ def main():
     max_pages = 0
     citation_style = "gb7714"
     output_dir: Path | None = None
+    bibtex = False
+    verbose = False
+    quiet = False
+    recursive = True
     i = 0
     while i < len(args):
         if args[i] in ("--max-pages", "-m") and i + 1 < len(args):
@@ -741,14 +1103,29 @@ def main():
         elif args[i] in ("--output-dir", "-o") and i + 1 < len(args):
             output_dir = Path(args[i + 1]).expanduser()
             i += 2
+        elif args[i] in ("--bibtex", "-b"):
+            bibtex = True
+            i += 1
+        elif args[i] in ("--verbose", "-v"):
+            verbose = True
+            i += 1
+        elif args[i] in ("--quiet", "-q"):
+            quiet = True
+            i += 1
+        elif args[i] in ("--no-recursive",):
+            recursive = False
+            i += 1
         else:
             i += 1
+
+    _setup_logging(verbose=verbose, quiet=quiet)
 
     # Determine folder path (first non-flag positional arg)
     pos_args = [a for a in args if not a.startswith("-")]
     if not pos_args:
         print("用法：python extract_literature_metadata.py <文献文件夹路径>")
-        print("  [--max-pages N] [--citation-style gb7714|apa|mla|numbered] [--output-dir PATH]")
+        print("  [--max-pages N] [--citation-style gb7714|apa|mla|numbered]")
+        print("  [--output-dir PATH] [--bibtex] [--verbose] [--quiet] [--no-recursive]")
         print("未提供路径，进入交互模式...")
         lit_dir = _prompt_path()
     else:
@@ -762,18 +1139,23 @@ def main():
             print("进入交互模式...")
             lit_dir = _prompt_path()
 
-    all_files = sorted([f for f in lit_dir.iterdir() if f.is_file()])
+    # Collect files (recursive by default)
+    if recursive:
+        all_files = sorted([f for f in lit_dir.rglob("*") if f.is_file()])
+    else:
+        all_files = sorted([f for f in lit_dir.iterdir() if f.is_file()])
+
     lit_files = [f for f in all_files if f.suffix.lower() in SUPPORTED_EXTS | CAJ_EXT]
     skipped = [f.name for f in all_files if f.suffix.lower() not in SUPPORTED_EXTS | CAJ_EXT]
 
     if not lit_files:
-        print(f"\n在 {lit_dir} 中未找到支持的文献文件。")
+        logging.error("在 %s 中未找到支持的文献文件。", lit_dir)
         _interactive_prompt_unsupported(skipped, SUPPORTED_EXTS | CAJ_EXT)
         sys.exit(1)
 
-    print(f"\n找到 {len(lit_files)} 篇文献，开始处理...")
+    logging.info("找到 %d 篇文献，开始处理...", len(lit_files))
     if skipped:
-        print(f"跳过 {len(skipped)} 个不支持的文件")
+        logging.info("跳过 %d 个不支持的文件", len(skipped))
 
     # Determine output directory
     if output_dir is None:
@@ -797,23 +1179,37 @@ def main():
             to_extract.append(lf)
 
     if cache_hits:
-        print(f"  缓存命中 {cache_hits} 篇（文件未变更），跳过重新提取")
+        logging.info("缓存命中 %d 篇（文件未变更），跳过重新提取", cache_hits)
     if to_extract:
-        print(f"  需要重新提取 {len(to_extract)} 篇")
+        logging.info("需要重新提取 %d 篇", len(to_extract))
 
     # Concurrent extraction with ThreadPoolExecutor (I/O-bound: reading files)
     if to_extract:
         max_workers = min(4, len(to_extract)) if to_extract else 1
-        print(f"使用 {max_workers} 线程并发处理...")
+        logging.info("使用 %d 线程并发处理...", max_workers)
 
         def _extract_with_log(path: str) -> dict:
             info = extract_info(path, max_pages=max_pages)
-            print(f"  [DONE] {info['format']:5} P{info['pages']:3} WC{info['word_count']:6} | {info['filename'][:45]}")
+            rel = Path(path).relative_to(lit_dir)
+            info["relative_path"] = str(rel)
+            info["filename"] = rel.name
+            logging.info(
+                "  [DONE] %s P%d WC%d | %s",
+                info["format"], info["pages"], info["word_count"], str(rel)[:50],
+            )
             return info
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             extracted = list(executor.map(_extract_with_log, (str(lf) for lf in to_extract)))
         results.extend(extracted)
+
+    # Also set relative_path for cached results if missing
+    for r in results:
+        if not r.get("relative_path"):
+            for lf in lit_files:
+                if lf.name == r.get("filename"):
+                    r["relative_path"] = str(lf.relative_to(lit_dir))
+                    break
 
     # Update cache with fresh results
     new_cache: dict[str, dict] = {}
@@ -831,9 +1227,9 @@ def main():
     # Duplicate detection
     duplicates = _find_duplicates(results)
     if duplicates:
-        print(f"\n  检测到 {len(duplicates)} 篇疑似重复文献")
+        logging.info("检测到 %d 篇疑似重复文献", len(duplicates))
         for fname, dlist in duplicates.items():
-            print(f"    - {fname} ↔ {', '.join(dlist)}")
+            logging.info("  - %s ↔ %s", fname, ", ".join(dlist))
 
     # Generate citations for each result
     for idx, r in enumerate(results, start=1):
@@ -848,9 +1244,10 @@ def main():
         status = "⚠️ SCANNED" if r["is_scanned"] else "  OK     "
         dup_mark = " [DUP]" if r["filename"] in duplicates else ""
         note = f" | NOTE: {r['note']}" if r["note"] else ""
+        rel = r.get("relative_path", r["filename"])
         print(
             f"[{status}] {r['format']:5} P{r['pages']:3} WC{r['word_count']:6} | "
-            f"{r['filename'][:45]}{dup_mark}{note}"
+            f"{rel[:45]}{dup_mark}{note}"
         )
 
     # JSON output
@@ -863,14 +1260,21 @@ def main():
     output_path = output_dir / "_literature_extraction.json"
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output_payload, f, ensure_ascii=False, indent=2)
-    print(f"\nJSON 结果已保存：{output_path}")
+    logging.info("JSON 结果已保存：%s", output_path)
 
     # Markdown report output
     md_path = output_dir / "_literature_report.md"
     md_content = generate_markdown_report(results, lit_dir, skipped, duplicates, citation_style)
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_content)
-    print(f"Markdown 报告已保存：{md_path}")
+    logging.info("Markdown 报告已保存：%s", md_path)
+
+    # BibTeX output
+    if bibtex:
+        bib_path = output_dir / "_literature_references.bib"
+        with open(bib_path, "w", encoding="utf-8") as f:
+            f.write(generate_bibtex(results))
+        logging.info("BibTeX 文件已保存：%s", bib_path)
 
 
 if __name__ == "__main__":
