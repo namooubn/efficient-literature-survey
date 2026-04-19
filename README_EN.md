@@ -12,8 +12,9 @@ Supports **custom chapter structures** or **default templates** (Chinese / Engli
 
 | Stage | Action | Output |
 |-------|--------|--------|
+| **0. User Configuration** | Confirm language, citation format, chapter structure, **research positioning** (title/abstract/keywords — any is fine) | Config checklist + user study positioning |
 | 1. Batch Extract | Script extracts metadata from all literature files | JSON report with titles, authors, pages, word count, text volume, scan detection |
-| 2. Cluster & Prioritize | Group into 5-8 thematic clusters | Literature map with P0/P1/P2 reading tiers |
+| 2. Cluster & Prioritize | Group into 5-8 thematic clusters, **score relevance against user's positioning** (Direct/Adjacent/Peripheral/Tangential), then assign reading tiers | Literature map with P0/P1/P2 reading tiers |
 | 3. Targeted Reading | Read by tier (full / abstract+conclusion / abstract only) | Extracted arguments and quotes |
 | 4. Structured Writing | Write according to user's chapter framework | Formatted introduction + review draft |
 
