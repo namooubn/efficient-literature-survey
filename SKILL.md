@@ -1,6 +1,6 @@
 ---
 name: efficient-literature-survey
-description: Use when the user needs to read a large number of literature references (10+) in PDF, DOCX, TXT, MD, or EPUB format and write a thesis introduction and literature review. Triggers include phrases like "帮我读文献", "写绪论和综述", "快速理解大量文献", "节省token读论文", "literature review", "thesis introduction", "batch read papers", "write my literature review", "帮我写文献综述", "批量读PDF写论文", "efficient literature survey", "save tokens reading papers", typing `/efficient-literature-survey`, or when the user has a folder of literature files and needs structured academic output.
+description: Use when the user needs to batch-read academic literature (10+ files in PDF/DOCX/TXT/MD/EPUB) and write a thesis introduction or literature review. Triggers on phrases like "帮我读文献", "literature review", "batch read papers", or when the user has a folder of literature files needing structured academic output.
 ---
 
 # Efficient Literature Survey Workflow
@@ -12,6 +12,16 @@ A five-stage workflow (Stage 0–4) that compresses millions of words of literat
 **Supported formats:** PDF, DOCX (Word), TXT, MD (Markdown), EPUB. CAJ files are detected but require manual conversion to PDF first.
 
 **Token savings:** Typical reduction from 5M+ characters (full-text reading) to ~30k characters (structured map + targeted excerpts), a **99%+ reduction**.
+
+## Triggers
+
+Natural-language triggers that activate this skill:
+- "帮我读文献", "写绪论和综述", "快速理解大量文献", "节省token读论文"
+- "帮我写文献综述", "批量读PDF写论文"
+- "literature review", "thesis introduction", "batch read papers", "write my literature review"
+- "efficient literature survey", "save tokens reading papers"
+- Typing `/efficient-literature-survey`
+- User has a folder of literature files and needs structured academic output
 
 ## When to Use
 

@@ -84,11 +84,20 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 
 | 格式 | 元数据提取 | pages | word_count | 扫描检测 | 依赖 |
 |------|-----------|-------|-----------|---------|------|
-| **PDF** | 标题、作者、页数、字数、文本量 | ✅ 真实页数 | ✅ 中英文混合智能统计 | ✅ 是 | PyPDF2 + pdfplumber |
+| **PDF** | 标题、作者、页数、字数、文本量 | ✅ 真实页数 | ✅ 中英文混合智能统计 | ✅ 多页采样 | PyPDF2 + pdfplumber |
 | **DOCX** | 标题、作者、字数、文本量 | ✅ 估算（字数÷500） | ✅ 中英文混合智能统计 | ❌ 否 | python-docx |
 | **TXT / MD** | 字数、文本量 | ✅ 估算 | ✅ 中英文混合智能统计 | ❌ 否 | 内置 |
 | **EPUB** | 标题、作者、字数、文本量 | ✅ 估算 | ✅ 中英文混合智能统计 | ❌ 否 | ebooklib + beautifulsoup4 |
 | **CAJ** | 仅文件名 | ❌ | ❌ | N/A | 提示用户转为 PDF（CAJViewer / caj2pdf） |
+
+### 性能与增量特性
+
+| 特性 | 说明 | 效果 |
+|------|------|------|
+| **并发提取** | `ThreadPoolExecutor(max_workers=4)` 多线程并行读取 | 30 篇文献提速约 2-3 倍 |
+| **增量缓存** | 基于文件 SHA-256 哈希，未变更文件跳过重新提取 | 二次运行秒级完成 |
+| **多页采样扫描检测** | 采样 PDF 开头、中间、结尾页判断是否为扫描件 | 大幅降低封面图导致的误报 |
+| **结构化异常记录** | 提取失败时记录错误类型到报告备注栏 | 不再静默失败 |
 
 ### 真实数据闭环
 
@@ -156,11 +165,13 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 
 ```
 efficient-literature-survey/
-├── SKILL.md                         # Claude 读取的核心 skill 文档（仅 Claude Code 有效）
-├── extract_literature_metadata.py   # 独立批量提取脚本（任何 Python 环境可用）
-├── extract_pdf_metadata.py          # 旧版 PDF-only 脚本（保留向后兼容）
-├── README.md                        # 中文版本（本文件）
-└── README_EN.md                     # English version
+├── SKILL.md                              # Claude 读取的核心 skill 文档（仅 Claude Code 有效）
+├── extract_literature_metadata.py        # 独立批量提取脚本（任何 Python 环境可用）
+├── extract_pdf_metadata.py             # 旧版 PDF-only 脚本（保留向后兼容）
+├── test_extract_literature_metadata.py # 单元测试（24 个用例）
+├── CHANGELOG.md                        # 版本变更日志
+├── README.md                           # 中文版本（本文件）
+└── README_EN.md                        # English version
 ```
 
 ### 为什么能省 Token

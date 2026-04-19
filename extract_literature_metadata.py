@@ -16,8 +16,10 @@ import sys
 import json
 import math
 import re
+import hashlib
 from pathlib import Path
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +53,95 @@ def _smart_word_count(text: str) -> int:
     if len(cn_chars) == 0:
         return len(text.split())
     return len(cn_chars) + len(en_tokens)
+
+
+def _detect_scanned_pdf(page_texts: list, total_pages: int) -> bool:
+    """
+    Multi-page sampling heuristic for scanned/image-based PDF detection.
+    Samples pages at beginning, middle, and end to avoid false positives
+    from cover pages or front matter that are image-only.
+    """
+    if total_pages <= 1 or not page_texts:
+        return False
+
+    total_chars = sum(len(t) for t in page_texts)
+
+    # Fast path: very high text volume = definitely not scanned
+    if total_chars > 8000:
+        return False
+
+    # Sample pages at beginning, middle, and end
+    indices = [0]
+    if total_pages > 3:
+        mid = min(total_pages // 2, len(page_texts) - 1)
+        if mid > 0:
+            indices.append(mid)
+    if total_pages > 5:
+        end = min(total_pages - 1, len(page_texts) - 1)
+        if end not in indices:
+            indices.append(end)
+
+    sampled = [page_texts[i] for i in indices if i < len(page_texts)]
+    empty_samples = sum(1 for t in sampled if len(t.strip()) < 25)
+
+    # If majority of sampled pages are nearly empty, likely scanned
+    if len(sampled) >= 2 and empty_samples / len(sampled) >= 0.66:
+        return True
+
+    # Fallback: very low text density across all sampled pages
+    density = total_chars / total_pages if total_pages > 0 else 0
+    if density < 12 and total_pages > 3:
+        return True
+
+    # Extra fallback: original single-threshold for short docs
+    if total_chars < 50:
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Incremental / caching helpers
+# ---------------------------------------------------------------------------
+
+def _file_sha256(file_path: str) -> str:
+    """Compute SHA-256 hash of a file for cache invalidation."""
+    h = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            while chunk := f.read(8192):
+                h.update(chunk)
+    except Exception:
+        return ""
+    return h.hexdigest()
+
+
+def _load_cache(cache_path: Path) -> dict:
+    """Load cached extraction results keyed by filename -> {sha256, result}."""
+    if not cache_path.exists():
+        return {}
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and "files" in data:
+            return data["files"]
+    except Exception:
+        pass
+    return {}
+
+
+def _save_cache(cache_path: Path, cache_data: dict) -> None:
+    """Save cache with version and timestamp metadata."""
+    payload = {
+        "version": 1,
+        "generated_at": datetime.now().isoformat(),
+        "files": cache_data,
+    }
+    try:
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"  [WARN] 缓存保存失败：{e}")
 
 
 # ---------------------------------------------------------------------------
@@ -110,18 +201,26 @@ def extract_pdf(pdf_path: str) -> dict:
             result["author_from_meta"] = str(meta.get("/Author", ""))
             result["title_from_meta"] = str(meta.get("/Title", ""))
 
+        page_texts = []
         total_text = ""
         for i, page in enumerate(reader.pages[:15]):
             try:
                 txt = page.extract_text() or ""
+                page_texts.append(txt)
                 total_text += txt
                 if i == 0:
                     result["first_page_text"] = _safe_truncate(txt)
-            except Exception:
-                pass
+            except Exception as e:
+                page_texts.append("")
+                if not result["note"]:
+                    result["note"] = ""
+                result["note"] += f"Page {i} extract error: {type(e).__name__}; "
         result["text_chars"] = len(total_text)
-    except Exception:
-        pass
+    except Exception as e:
+        page_texts = []
+        if not result["note"]:
+            result["note"] = ""
+        result["note"] += f"PyPDF2 error: {type(e).__name__}: {e}; "
 
     # Fallback to pdfplumber if PyPDF2 extracted very little text
     if result["text_chars"] < 500:
@@ -129,23 +228,24 @@ def extract_pdf(pdf_path: str) -> dict:
             import pdfplumber
             with pdfplumber.open(pdf_path) as pdf:
                 result["pages"] = len(pdf.pages)
+                page_texts = []
                 total_text = ""
                 for i, page in enumerate(pdf.pages[:15]):
                     txt = page.extract_text() or ""
+                    page_texts.append(txt)
                     total_text += txt
                     if i == 0:
                         result["first_page_text"] = _safe_truncate(txt)
                 result["text_chars"] = len(total_text)
-        except Exception:
-            pass
+        except Exception as e:
+            if not result["note"]:
+                result["note"] = ""
+            result["note"] += f"pdfplumber fallback error: {type(e).__name__}: {e}; "
 
     result["word_count"] = _smart_word_count(total_text) if result["text_chars"] > 0 else 0
 
-    # Scanned-image detection heuristic (PDF only)
-    if result["text_chars"] < 200 and result["pages"] > 5:
-        result["is_scanned"] = True
-    elif result["text_chars"] < 50:
-        result["is_scanned"] = True
+    # Scanned-image detection heuristic (PDF only) — multi-page sampling
+    result["is_scanned"] = _detect_scanned_pdf(page_texts, result["pages"])
 
     return result
 
@@ -448,15 +548,57 @@ def main():
         _interactive_prompt_unsupported(skipped, SUPPORTED_EXTS | CAJ_EXT)
         sys.exit(1)
 
-    results = []
     print(f"\n找到 {len(lit_files)} 篇文献，开始处理...")
     if skipped:
         print(f"跳过 {len(skipped)} 个不支持的文件")
 
-    for i, lf in enumerate(lit_files, 1):
-        print(f"  [{i}/{len(lit_files)}] {lf.name}")
-        info = extract_info(str(lf))
-        results.append(info)
+    # Load cache for incremental extraction
+    cache_path = lit_dir / "_literature_cache.json"
+    cache = _load_cache(cache_path)
+    results: list[dict] = []
+    to_extract: list[Path] = []
+    cache_hits = 0
+
+    for lf in lit_files:
+        file_hash = _file_sha256(str(lf))
+        cached = cache.get(lf.name)
+        if cached and cached.get("sha256") == file_hash and cached.get("result"):
+            results.append(cached["result"])
+            cache_hits += 1
+        else:
+            to_extract.append(lf)
+
+    if cache_hits:
+        print(f"  缓存命中 {cache_hits} 篇（文件未变更），跳过重新提取")
+    if to_extract:
+        print(f"  需要重新提取 {len(to_extract)} 篇")
+
+    # Concurrent extraction with ThreadPoolExecutor (I/O-bound: reading files)
+    if to_extract:
+        max_workers = min(4, len(to_extract)) if to_extract else 1
+        print(f"使用 {max_workers} 线程并发处理...")
+
+        def _extract_with_log(path: str) -> dict:
+            info = extract_info(path)
+            print(f"  [DONE] {info['format']:5} P{info['pages']:3} WC{info['word_count']:6} | {info['filename'][:45]}")
+            return info
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            extracted = list(executor.map(_extract_with_log, (str(lf) for lf in to_extract)))
+        results.extend(extracted)
+
+    # Update cache with fresh results
+    new_cache: dict[str, dict] = {}
+    for r in results:
+        fname = r.get("filename", "")
+        for lf in lit_files:
+            if lf.name == fname:
+                new_cache[fname] = {
+                    "sha256": _file_sha256(str(lf)),
+                    "result": r,
+                }
+                break
+    _save_cache(cache_path, new_cache)
 
     # Console summary
     print("\n" + "=" * 80)

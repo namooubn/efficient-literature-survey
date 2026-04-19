@@ -80,11 +80,20 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 
 | Format | Metadata Extracted | pages | word_count | Scan Detection | Dependencies |
 |--------|-------------------|-------|-----------|----------------|--------------|
-| **PDF** | Title, author, pages, word count, text volume | ✅ Real page count | ✅ Smart CJK/English mixed counting | ✅ Yes | PyPDF2 + pdfplumber |
+| **PDF** | Title, author, pages, word count, text volume | ✅ Real page count | ✅ Smart CJK/English mixed counting | ✅ Multi-page sampling | PyPDF2 + pdfplumber |
 | **DOCX** | Title, author, word count, text volume | ✅ Estimated (chars÷500) | ✅ Smart CJK/English mixed counting | ❌ No | python-docx |
 | **TXT / MD** | Word count, text volume | ✅ Estimated | ✅ Smart CJK/English mixed counting | ❌ No | Built-in |
 | **EPUB** | Title, author, word count, text volume | ✅ Estimated | ✅ Smart CJK/English mixed counting | ❌ No | ebooklib + beautifulsoup4 |
 | **CAJ** | Filename only | ❌ | ❌ | N/A | Prompts user to convert to PDF (CAJViewer / caj2pdf) |
+
+### Performance & Incremental Features
+
+| Feature | Description | Impact |
+|---------|-------------|--------|
+| **Concurrent extraction** | `ThreadPoolExecutor(max_workers=4)` parallelizes file I/O | ~2-3x faster for 30+ files |
+| **Incremental caching** | SHA-256 file hashing skips unchanged files on re-runs | Subsequent runs complete in seconds |
+| **Multi-page scan detection** | Samples beginning, middle, and end pages of PDFs | Greatly reduces false positives from image-only cover pages |
+| **Structured error logging** | Extraction failures are recorded in report notes | No more silent failures |
 
 ### Real-World Results
 
@@ -150,11 +159,13 @@ If you don't use Claude Code, you can still use the **Python script standalone**
 
 ```
 efficient-literature-survey/
-├── SKILL.md                         # Core skill document for Claude (Claude Code only)
-├── extract_literature_metadata.py   # Standalone batch extraction script (any Python env)
-├── extract_pdf_metadata.py          # Legacy PDF-only script (backward compatible)
-├── README.md                        # Chinese version
-└── README_EN.md                     # English version (this file)
+├── SKILL.md                              # Core skill document for Claude (Claude Code only)
+├── extract_literature_metadata.py        # Standalone batch extraction script (any Python env)
+├── extract_pdf_metadata.py             # Legacy PDF-only script (backward compatible)
+├── test_extract_literature_metadata.py # Unit tests (24 test cases)
+├── CHANGELOG.md                        # Version changelog
+├── README.md                           # Chinese version
+└── README_EN.md                        # English version (this file)
 ```
 
 ### How It Saves Tokens
