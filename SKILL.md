@@ -1,222 +1,214 @@
 ---
 name: efficient-literature-survey
-description: Use when the user needs to batch-read academic literature (10+ files in PDF/DOCX/TXT/MD/EPUB) and write a thesis introduction or literature review. Triggers on phrases like "帮我读文献", "literature review", "batch read papers", or when the user has a folder of literature files needing structured academic output.
+description: Use when the user needs to batch-read academic literature (10+ files) and write a thesis introduction or literature review. Triggers on phrases like "帮我读文献", "literature review", "batch read papers", or when the user has a folder of literature files needing structured academic output.
 ---
 
 # Efficient Literature Survey Workflow
 
-## Overview
+## Core Assumptions
 
-A five-stage workflow (Stage 0–4) that compresses millions of words of literature into a structured literature map, then writes a thesis introduction and literature review. **Core principle:** Never read every word — extract metadata, cluster by theme, and read only what the output needs.
-
-**Supported formats:** PDF, DOCX, TXT, MD, EPUB. CAJ files are detected but require manual conversion to PDF first.
-
-**Token savings:** Typical reduction from 5M+ characters (full-text reading) to ~30k characters (structured map + targeted excerpts), a **99%+ reduction**.
+- **文献类型**：用户提供的文件是学术论文、专著或学位论文。**非学术内容**（新闻报道、法律文件、产品手册）需标记为 `non-academic` 并降级至 P2 仅摘要处理。
+- **语言**：支持中英混合文献。输出语言以 Stage 0 用户配置为准。
+- **格式**：PDF, DOCX, TXT, MD, EPUB。CAJ 需先转 PDF。
+- **Token 策略**：从全文通读（5M+ 字符）压缩至定向阅读（~30k 字符），节省 **99%+**。
 
 ## Triggers
 
 - "帮我读文献", "写绪论和综述", "快速理解大量文献", "节省token读论文"
-- "帮我写文献综述", "批量读PDF写论文"
 - "literature review", "thesis introduction", "batch read papers"
-- "efficient literature survey", "save tokens reading papers"
 - User has a folder of literature files and needs structured academic output
 
-## When to Use
+**When NOT to use:** < 5 papers, single-paper summary only, or purely non-academic files.
 
-- User has 10-100 literature references (papers, monographs, mixed Chinese/English)
-- User needs to write a thesis introduction and/or literature review
-- User mentions wanting to "save tokens" or "quickly understand" a large corpus
+## Starting Mode
 
-**When NOT to use:**
-- User has fewer than 5 papers (just read them directly)
-- User only wants a simple summary of one paper
-- The papers are non-academic (news clippings, legal filings without abstracts)
+- **Mode A (default)**: Run Stage 1 script immediately → show results table → collect remaining Stage 0 configs.
+- **Mode B**: If user proactively gives all 5 configs, skip straight to Stage 1.
 
-## Two Starting Modes
+## Stage 0: User Configuration (REQUIRED — hold here until all 5 collected)
 
-### Mode A: Guided Start (default)
+| # | Config | Ask |
+|---|--------|-----|
+| 1 | Output language | "What language?" |
+| 2 | Citation format | "APA / MLA / GB/T 7714 / numbered `[1]` ?" |
+| 3 | Chapter structure | "Custom headings or default template (Chinese/English thesis)?" |
+| 4 | Research positioning | "Thesis title, abstract, research question, OR 3-5 keywords — any is fine." |
+| 5 | Literature folder path | "Where are your files?" |
 
-If the user has given a literature folder but has not yet confirmed the five Stage 0 configs, do NOT bombard them with five questions upfront. Instead:
+**Rule**: Do NOT proceed to Stage 4 until all 5 are collected. If custom structure chosen but not yet provided, hold at Stage 0.
 
-1. **Run Stage 1 immediately** using the `extract_literature_metadata.py` script on the user's folder.
-2. **Show the results in a table** — this gives the user immediate tangible feedback and builds trust.
-3. **Then ask for the remaining Stage 0 configs** one at a time, or in a single compact message.
+## Stage 1: Batch Extract Metadata
 
-### Mode B: Full Config Start
-
-If the user proactively gives language, citation format, chapter structure, research positioning, and folder path all at once, skip straight to Stage 1.
-
-## Workflow
-
-### Stage 0: User Configuration (Required)
-
-**BEFORE proceeding to Stage 2, collect the following. Do not proceed to Stage 4 without all five.**
-
-| Config Item | Question to Ask |
-|-------------|-----------------|
-| **Output language** | "What language should the output be in?" |
-| **Citation format** | "What citation style should I use?" (APA, MLA, GB/T 7714, numbered `[1]`, etc.) |
-| **Chapter structure** | "Custom structure or default template (Chinese/English thesis)?" |
-| **User research positioning** | "Thesis title, abstract, research question, OR 3-5 keywords — whichever is easiest." |
-| **Literature folder path** | "Where are your literature files located?" |
-
-Accept **any** of: title, abstract, research question, keywords, or a mix. Do not force the user into a rigid format.
-
-If the user chose "custom" but hasn't provided the structure yet, **hold at Stage 0** until they do.
-
-### Stage 1: Batch Extract Literature Metadata
-
-Run `extract_literature_metadata.py` over the user's literature folder to extract:
+Run `extract_literature_metadata.py <folder_path>` to extract:
 - Title, author, year, page count, word count
-- Estimated text volume (character count from first N pages)
-- Scanned-image detection for PDFs
-- First-page preview text
+- Journal/volume/issue/page-range/DOI (heuristic detection)
+- Scanned-image flag, first-page preview text
+- Duplicate detection
 
-**Output:** A structured JSON table and a Markdown report (`_literature_report.md`).
+**Output**: `_literature_extraction.json` + `_literature_report.md` + optional `_literature_references.bib`.
 
-**Decision points:**
-- If a PDF is flagged as scanned, warn the user that OCR may be needed.
-- If CAJ files are detected, instruct the user to convert them to PDF before re-running.
+**Decision points**:
+- Scanned PDF → warn user; suggest `marker` / `nougat` / `tesseract` OCR.
+- CAJ detected → instruct conversion to PDF.
+- >40 refs → batch by subfolder or cluster.
 
-**[USER_CHECKPOINT]: After presenting Stage 1 results, WAIT for user acknowledgment before proceeding to Stage 2.**
+**[USER_CHECKPOINT]**: Present Stage 1 results table. WAIT for user acknowledgment before Stage 2.
 
-### Stage 2: Build Literature Map (Cluster + Prioritize)
+## Stage 2: Build Literature Map (Cluster + Prioritize)
 
-**Inputs:** Extracted metadata (titles, previews) from Stage 1 + user research positioning from Stage 0.
+**Inputs**: Stage 1 metadata (titles, previews) + Stage 0 research positioning.
 
-**Step 1: Cluster by theme** — Group references into **5-8 thematic clusters** based on titles and preview texts.
+### Step 1: Thematic Clustering (MANDATORY)
 
-**Step 2: Score relevance** — Assign a relevance score to each cluster:
+Group references into **5-8 thematic clusters**. Each cluster name MUST include 1-2 representative keywords in parentheses.
 
-| Score | Meaning | Action |
-|-------|---------|--------|
-| **Direct** | Directly addresses the user's research question | → P0 |
-| **Adjacent** | Provides supporting theory, method, or context | → P1 |
-| **Peripheral** | Broadly in the same field but not closely tied | → P2 |
-| **Tangential** | Minimal connection | → Exclude |
+**Example — Clustering 5 papers on LLM research:**
 
-**Prioritization tiers:**
-- **P0 (Core):** 5-8 references. Read full text.
-- **P1 (Support):** 15-20 references. Read abstract + conclusion + keyword-matched sections.
-- **P2 (Background):** Remaining references. Read abstract only.
+| Title | Assigned Cluster |
+|-------|-----------------|
+| Attention Is All You Need | 1. Transformer架构与注意力机制 (Transformer, Attention) |
+| BERT: Pre-training of Deep Bidirectional Transformers | 2. 预训练与表征学习 (Pre-training, Representation) |
+| Language Models are Few-Shot Learners (GPT-3) | 3. 大模型推理与涌现能力 (LLM, Emergence) |
+| Chain-of-Thought Prompting Elicits Reasoning | 3. 大模型推理与涌现能力 (LLM, Emergence) |
+| Evaluating Large Language Models via Human Preference | 4. 模型评估与对齐 (Evaluation, Alignment) |
 
-**[CONTEXT_OVERFLOW] guard:** If >40 references, filter by format or cluster in batches.
+**Rule**: A paper belongs to exactly one primary cluster. If cross-cutting, note secondary cluster in `note`.
 
-**[USER_CHECKPOINT]: Present the complete literature map and WAIT for confirmation.** Show clusters, relevance scores, and proposed reading strategy. Ask the user to confirm or adjust before proceeding.
+### Step 2: Relevance Scoring (MANDATORY)
 
-### Stage 3: Targeted Reading by Tier
+Score each cluster using the user's Stage 0 research positioning keywords as explicit criteria.
 
-**[USER_CHECKPOINT]: Before starting Stage 3, present the reading plan for confirmation.** Show which P0/P1/P2 references you will read at what depth, and any scanned monographs strategy.
+| Score | Meaning | Action | Reading Depth |
+|-------|---------|--------|--------------|
+| **Direct** | Directly addresses user's research question | → P0 Core | Full text (≤50k chars) or abstract+conclusion+key chapters |
+| **Adjacent** | Supports theory, method, or context | → P1 Support | Abstract + conclusion + keyword-matched sections |
+| **Peripheral** | Same field, loosely tied | → P2 Background | Abstract only |
+| **Tangential** | Minimal connection | → Exclude | Do not cite |
 
-**For P0 references (full-text or structured read):**
-1. Read the first 2,000 characters to identify structure.
-2. If ≤ 50,000 characters, read the entire file.
-3. If > 50,000 characters, read abstract + conclusion first, then 2-3 key chapters.
-4. Extract: core argument, 2-3 direct quotations, theoretical lineage, methodological approach.
+**Rule**: Every score MUST reference at least one keyword from the user's Stage 0 positioning. Example: "Cluster 3 scored Direct because it addresses 'chain-of-thought reasoning', which matches user's keyword 'reasoning enhancement'."
 
-**For P1 references (abstract + keyword-targeted sections):**
-1. Read the first 2,000 characters (abstract + introduction).
-2. Read the last 1,500 characters (conclusion / discussion).
-3. If keywords appear in preview text, read matched sections (± 500 chars around each match).
-4. Extract: 2-3 sentences summarizing contribution + how it connects to the user's research gap.
+**[CONTEXT_OVERFLOW] guard**: >40 refs → filter by format or cluster in batches.
 
-**For P2 references (abstract only):**
-1. Read the first 1,000 characters (abstract).
-2. Confirm what the paper does and where it fits in the thematic map.
-3. Write a one-sentence positioning note.
+**[USER_CHECKPOINT]**: Present complete map (clusters, scores, reading strategy). WAIT for confirmation.
 
-**[CONTEXT_OVERFLOW] guard:** If combined P0 + P1 text exceeds 100,000 words, downgrade all P1 to "abstract only" and keep only top 5 P0 for full reading.
+## Stage 3: Targeted Reading by Tier
 
-**[USER_CHECKPOINT]: After Stage 3, present a brief reading summary.** Summarize key arguments from P0, how P1 supports the gap, and any surprises. Ask if satisfied before proceeding.
+**[USER_CHECKPOINT]**: Present reading plan (which P0/P1/P2, at what depth). WAIT for confirmation.
 
-### Stage 4: Structured Writing
+### P0 (Core) — 5-8 refs
+1. Read first 2,000 chars for structure.
+2. If ≤50,000 chars → full text.
+3. If >50,000 chars → abstract + conclusion + 2-3 key chapters.
+4. Extract: core argument, 2-3 direct quotations, theoretical lineage, methodology.
 
-Write the introduction and literature review according to the **user's prescribed chapter structure** (collected in Stage 0). Do not use any default template unless the user explicitly chose "default structure."
+### P1 (Support) — 15-20 refs
+1. First 2,000 chars (abstract + intro).
+2. Last 1,500 chars (conclusion).
+3. If keywords appear in preview → read matched sections (±500 chars).
+4. Extract: 2-3 sentences on contribution + connection to research gap.
 
-**Writing rules:**
-- Strictly use the user's chapter structure.
-- Cite in the user's required format.
-- Use P0 references for deep theoretical anchoring.
-- Use P1 references for empirical support and secondary claims.
-- Use P2 references sparingly, mainly for breadth or historical positioning.
-- Every claim must be traceable to a specific reference.
-- In the final section, explicitly name the research gap and state how the user's study fills it.
-- Write in the user's specified output language.
+### P2 (Background) — remaining refs
+1. First 1,000 chars (abstract).
+2. One-sentence positioning note.
 
-**[USER_CHECKPOINT]: After Stage 4 output, ask for revision feedback.** Present the draft and ask the user to confirm structure, citation format, reference accuracy, and gap analysis.
+**[CONTEXT_OVERFLOW] guard**: Combined P0+P1 >100k words → downgrade all P1 to abstract-only; keep top 5 P0 only.
+
+**[USER_CHECKPOINT]**: After Stage 3, present brief reading summary. WAIT before Stage 4.
+
+## Stage 4: Structured Writing
+
+Write introduction and literature review per user's Stage 0 chapter structure. **Do NOT use any default template unless explicitly chosen.**
+
+### Writing Rules (MANDATORY)
+
+1. **Strict chapter structure**: Use user's exact heading hierarchy.
+2. **Citation format**: Use user's required style (APA/MLA/GB/numbered).
+3. **Source anchoring**:
+   - P0 refs → deep theoretical anchoring and primary claims
+   - P1 refs → empirical support and secondary claims
+   - P2 refs → breadth or historical positioning only
+4. **Every claim must be traceable** to a specific reference.
+5. **Research gap**: Final section MUST explicitly name the gap and state how user's study fills it.
+6. **Output language**: Strictly follow Stage 0 config.
+7. **Temporal evolution (NEW)**: Within each cluster, organize references chronologically or by theoretical lineage. Show: early work → turning points → recent advances.
+8. **Critical analysis (NEW)**: In each cluster, identify at least ONE conflict, methodological limitation, or contradictory finding among cited refs. Explain how user's study addresses or avoids it.
+9. **Survey vs. original distinction**: High-citation survey papers in a cluster must be flagged as `〔综述〕` and used as theoretical anchors; original experimental papers support specific claims.
+
+### Few-Shot: Writing a Cluster Paragraph
+
+**User positioning**: "Research on chain-of-thought prompting in large language models"
+
+**Good example** (follows rules 7+8):
+> Early efforts to elicit reasoning from LLMs relied on few-shot exemplars without explicit intermediate steps (Brown et al., 2020). The breakthrough came with chain-of-thought (CoT) prompting, which demonstrated that inserting reasoning chains into prompts significantly improves arithmetic and commonsense reasoning (Wei et al., 2022). However, subsequent work revealed a critical tension: while CoT improves performance on complex tasks, it can amplify biases present in the training data (Turpin et al., 2023), and its effectiveness diminishes sharply in low-resource languages (Shi et al., 2022). These conflicting findings highlight the need for bias-aware CoT mechanisms — the gap this study addresses by proposing [your method].
+
+**Bad example** (violates rules 7+8 — flat listing, no conflict):
+> Wei et al. (2022) proposed chain-of-thought prompting. Kojima et al. (2022) used zero-shot CoT. Wang et al. (2023) improved it with self-consistency. These methods all improve reasoning.
+
+**[USER_CHECKPOINT]**: After Stage 4, present draft and ask for revision feedback (structure, citations, gap analysis).
+
+## Append Mode: Adding New References
+
+When user says "add more papers" or "I found 5 new refs":
+
+1. **Incremental extraction**: Run Stage 1 script. SHA-256 cache ensures unchanged files are skipped.
+2. **Re-cluster assessment**: New refs go through Stage 2. Existing clusters may be renamed or split if new refs reveal a missing theme.
+3. **Minimal rewrite**: Update literature map with new refs marked `〔新增〕`. Revise Stage 4 draft ONLY in affected clusters. Do NOT rewrite unaffected sections.
+4. **Citation renumbering**: If using numbered citations, renumber globally. Present a diff of citation changes.
 
 ## Tool Use
 
-### Bash — Run the extraction script
-
-**When to use:** At the start of Stage 1, after the user has provided the literature folder path.
-
+### Bash — Run extraction script
 ```bash
-python extract_literature_metadata.py <folder_path> [--max-pages N] [--citation-style STYLE] [--output-dir PATH]
+python extract_literature_metadata.py <folder_path> [--max-pages N] [--citation-style STYLE] [--output-dir PATH] [--bibtex] [--no-recursive]
 ```
 
-**Rules:**
-- Always use the full path (expand `~` if needed).
-- If missing dependencies, ask the user to run `pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4`.
-- Read the generated `_literature_report.md` to present results.
-
-### Read — Read individual papers by tier
-
-**When to use:** During Stage 3 (Targeted Reading).
-
+### Read — Targeted reading by tier
 | Tier | Strategy |
 |------|----------|
-| **P0 (Core)** | Full text if ≤ 50k chars; otherwise first 2k chars + key chapters |
-| **P1 (Support)** | First 2k chars + last 1.5k chars + keyword-matched sections |
-| **P2 (Background)** | First 1k chars (abstract) only |
+| P0 | Full text if ≤50k chars; else first 2k + key chapters |
+| P1 | First 2k + last 1.5k + keyword-matched sections |
+| P2 | First 1k (abstract) only |
 
-**Context overflow guard:** If combined P0 + P1 text exceeds 100k chars, downgrade all P1 to "abstract only" and keep only top 5 P0.
-
-### Write — Save the literature map and draft
-
-**When to use:** After Stage 2 (clustering) and Stage 4 (writing).
-
-**Files to write:**
-- `_literature_map.md` — cluster assignments, relevance scores, and reading plan
-- `_thesis_introduction.md` and/or `_literature_review.md` — Stage 4 output
+### Write — Save outputs
+- `_literature_map.md` — clusters, scores, reading plan
+- `_thesis_introduction.md` / `_literature_review.md` — Stage 4 output
 
 ## Quick Reference
 
 | Situation | Action |
 |-----------|--------|
-| User has 30+ files in a folder | Run Stage 1 script immediately |
-| PDF is scanned/image-based | Flag it; read TOC or do targeted OCR on key pages only |
-| Monograph >200 pages | Extract TOC, identify 2-3 relevant chapters, ignore the rest |
-| User hasn't provided chapter structure | Ask for it in Stage 0 before writing; do not guess |
-| User hasn't provided research positioning | Ask for title/abstract/keywords in Stage 0; do not cluster blindly |
-| Reference is weakly related | Exclude from citation list; note it in the map as "tangential" |
-| User wants to "save tokens" | Emphasize the P0/P1/P2 tier system |
-| CAJ files detected | Instruct user to convert to PDF using CAJViewer or caj2pdf |
-| User only gave a folder path | Use **Mode A Guided Start** — run Stage 1 first, then collect configs |
+| 30+ files in folder | Run Stage 1 immediately (Mode A) |
+| Scanned/image PDF | Flag; suggest OCR tools |
+| Monograph >200 pages | Extract TOC; read 2-3 relevant chapters only |
+| No chapter structure | Hold at Stage 0; do not guess |
+| No research positioning | Hold at Stage 0; do not cluster blindly |
+| Weak reference | Exclude; note as "tangential" in map |
+| User wants "save tokens" | Emphasize P0/P1/P2 tier system |
+| CAJ files | Instruct conversion to PDF |
+| Adding new refs mid-workflow | Use **Append Mode** |
 
 ## Common Mistakes
 
 - **Reading everything** — Extract metadata first. Opening every file burns context.
-- **No clustering** — Without thematic clusters, the review becomes a list of summaries rather than an argument.
-- **Clustering without user positioning** — Relevance scoring is guesswork without the user's research positioning.
-- **Guessing the thesis structure** — Ask for the exact heading hierarchy in Stage 0. A mismatched structure requires a full rewrite.
-- **Ignoring weak references** — Tangential references should be flagged and potentially excluded.
-- **Skipping the gap analysis** — Stage 4 must end with the user's research positioning.
-- **Skipping Stage 0 configuration** — Writing without confirming all five configs guarantees a mismatch.
-- **Auto-advancing without user confirmation** — Each `[USER_CHECKPOINT]` exists for a reason. Do not silently proceed.
+- **No clustering** — Without thematic clusters, review becomes a list of summaries, not an argument.
+- **Clustering without positioning** — Relevance scoring is guesswork without user's research keywords.
+- **Guessing structure** — Ask for exact headings in Stage 0. Mismatched structure = full rewrite.
+- **Ignoring weak refs** — Tangential refs must be flagged and potentially excluded.
+- **Skipping gap analysis** — Stage 4 MUST end with gap + positioning.
+- **Skipping Stage 0** — Writing without all 5 configs guarantees mismatch.
+- **Auto-advancing** — Each `[USER_CHECKPOINT]` exists for a reason. Do NOT silently proceed.
+- **Flat chronological listing** — Violates Rule 7. Must show evolution, not just sequence.
+- **No critical tension** — Violates Rule 8. A review without critique is a bibliography, not scholarship.
 
 ## Reusable Tool
 
-**`extract_literature_metadata.py`** — Batch-extracts titles, authors, page counts, word counts, text volume, and scanned-page detection from a folder of literature files. Outputs both JSON and Markdown.
+**`extract_literature_metadata.py`** — Batch-extracts titles, authors, page/word counts, text volume, scanned-page detection, bibliographic metadata (journal/vol/issue/DOI), duplicate detection, and formatted citations. Outputs JSON + Markdown + optional BibTeX.
 
-**Dependencies:**
-```bash
-pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
-```
+**Dependencies**: `PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4`
 
 ## Real-World Impact
 
-Applied to a corpus of **30 mixed Chinese/English references** (including 3 monographs of 200+ pages each):
-- Full-text reading would require ~5M+ characters of context.
-- After metadata extraction + clustering, targeted reading consumed ~30k characters.
-- Produced a **1,796-character introduction** and a **3,767-character literature review** with 35 properly positioned citations, organized into 8 thematic clusters.
+30 mixed Chinese/English refs (3 monographs 200+ pages):
+- Full-text: ~5M+ chars
+- Targeted reading: ~30k chars (**99.4% savings**)
+- Output: 1,796-char introduction + 3,767-char review with 35 citations, 8 clusters
