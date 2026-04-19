@@ -29,13 +29,65 @@ A four-stage workflow that compresses millions of words of literature into a str
 
 ### Stage 0: User Configuration (Required)
 
-**BEFORE running Stage 1, collect the following from the user. Do not proceed to Stage 4 without all three.**
+**BEFORE running Stage 1, collect the following from the user. Do not proceed to Stage 4 without all four.**
 
 | Config Item | Question to Ask | Examples |
 |-------------|-----------------|----------|
 | **Output language** | "What language should the output be in?" | Chinese, English, Japanese, etc. |
 | **Citation format** | "What citation style should I use?" | APA, MLA, Chicago, GB/T 7714, author-year `(Smith, 2004)`, numbered `[1]`, etc. |
 | **Chapter structure** | "Do you want to provide your own chapter structure, or use a default template?" | User says "custom" or "default" |
+| **User research positioning** | "To judge relevance, please provide your thesis title, abstract, research question, OR 3-5 keywords — whichever is easiest for you." | "短视频平台算法推荐对新闻消费行为的影响" OR "algorithmic recommendation, news consumption, short video, platform logic, user behavior" |
+
+**Research positioning — two input modes (user chooses whichever is easier):**
+
+**Mode A: Full description (preferred)**
+- Thesis title, abstract, or research question — any length, any detail.
+- The more context, the more accurate the relevance scoring in Stage 2.
+
+**Mode B: Keywords (lightweight)**
+- 3-5 core keywords or key phrases.
+- Enough for basic relevance matching if the user doesn't have a draft yet.
+
+**Rules:**
+- Accept **any** of the following: title, abstract, research question, keywords, or a mix. Do not force the user into a rigid format.
+- If the user provides only keywords, treat it as Mode B and proceed. If they provide a paragraph, treat it as Mode A and proceed. Do not ask for "more" if what they gave is already usable.
+- Record this positioning text at the top of the literature map document. Stage 2 uses it to score each cluster's relevance to the user's actual study.
+
+**Chapter structure — two paths:**
+
+**Path A: User provides custom structure**
+- Ask: "Please provide your exact chapter/section hierarchy (e.g., 1.1 Background → 1.2 Significance → 1.3 Methods; 2.1 Concepts → 2.2 Theory → 2.3 Review)"
+- Record verbatim. Stage 4 must follow this exactly.
+
+**Path B: User chooses default template**
+- Ask: "Which default template do you prefer — Chinese thesis structure or English thesis structure?"
+- Present both options and let the user pick one.
+
+**Default Chinese Thesis Structure:**
+```
+第一章 绪论
+  1.1 研究背景与问题提出
+  1.2 研究目的与意义（理论意义 + 实践意义）
+  1.3 研究思路与方法概述
+
+第二章 文献综述与理论框架
+  2.1 核心概念界定
+  2.2 理论基础与文献回顾（按主题簇组织）
+  2.3 文献评述与研究空间（贡献 → 不足 → 本研究切入点）
+```
+
+**Default English Thesis Structure:**
+```
+Chapter 1 Introduction
+  1.1 Research Background and Problem Statement
+  1.2 Research Objectives and Significance
+  1.3 Research Design and Methodology Overview
+
+Chapter 2 Literature Review and Theoretical Framework
+  2.1 Key Concepts and Definitions
+  2.2 Theoretical Foundations and Literature Review (organized by thematic clusters)
+  2.3 Critical Review and Research Gap (contributions → limitations → this study's entry point)
+```
 
 **Chapter structure — two paths:**
 
@@ -74,8 +126,8 @@ Chapter 2 Literature Review and Theoretical Framework
 ```
 
 **Rules:**
-- If the user has not provided all three configs, **ask before proceeding**. Do not guess.
-- Record all three configs (language, citation format, chosen structure) at the top of the literature map document for reference throughout the workflow.
+- If the user has not provided all four configs, **ask before proceeding**. Do not guess.
+- Record all four configs (language, citation format, chosen structure, research positioning) at the top of the literature map document for reference throughout the workflow.
 - If the user chose "custom" but hasn't provided the structure yet, **hold at Stage 0** until they do.
 
 ### Stage 1: Batch Extract Literature Metadata
@@ -103,23 +155,45 @@ Run a Python script over the user's literature folder to extract:
 
 ### Stage 2: Build Literature Map (Cluster + Prioritize)
 
-Based on the extracted metadata (titles, previews, page counts), cluster references into **5-8 thematic clusters**, for example:
+**Inputs:**
+1. Extracted metadata (titles, previews, page counts) from Stage 1
+2. User research positioning from Stage 0 (title/abstract/research question/keywords)
 
-| Cluster | Theme | Count | Strategy |
-|---------|-------|-------|----------|
-| A | Core theory (e.g., agenda-setting) | 4-6 | P0: Full-text精读 |
-| B | Counter-flow / reverse mechanisms | 3-5 | P0-P1 |
-| C | Meme / digital culture theory | 3-5 | P0-P1 |
-| D | Platform logic / governance | 2-4 | P1 |
-| E | Case methodology | 1-2 | P1 |
-| F | Weakly related / tangential | 2-5 | P2 or exclude |
+**Step 1: Cluster by theme**
+Group references into **5-8 thematic clusters** based on their titles and preview texts, for example:
+
+| Cluster | Theme | Count |
+|---------|-------|-------|
+| A | Core theory (e.g., agenda-setting) | 4-6 |
+| B | Counter-flow / reverse mechanisms | 3-5 |
+| C | Meme / digital culture theory | 3-5 |
+| D | Platform logic / governance | 2-4 |
+| E | Case methodology | 1-2 |
+| F | Weakly related / tangential | 2-5 |
+
+**Step 2: Score relevance against user's study**
+Compare each cluster's theme against the user's research positioning (Stage 0). Assign a **relevance score**:
+
+| Score | Meaning | Action |
+|-------|---------|--------|
+| **Direct** | Cluster directly addresses the user's research question or core concepts | → P0 |
+| **Adjacent** | Cluster provides supporting theory, method, or context | → P1 |
+| **Peripheral** | Cluster is broadly in the same field but not closely tied to the user's gap | → P2 |
+| **Tangential** | Cluster has minimal connection to the user's study | → Exclude or note only |
+
+**Example:**
+- User's positioning: "短视频平台中算法推荐对新闻消费行为的影响"
+- Cluster A "算法推荐机制" → **Direct** → P0
+- Cluster B "平台治理与内容审核" → **Adjacent** → P1
+- Cluster C "传统报业数字化转型" → **Peripheral** → P2
+- Cluster D "广告竞价策略" → **Tangential** → Exclude
 
 **Prioritization tiers:**
 - **P0 (Core):** 5-8 references that anchor the theoretical framework. Read full text.
 - **P1 (Support):** 15-20 references. Read abstract + conclusion + sections directly relevant to the user's research question.
 - **P2 (Background):** Remaining references. Read abstract only; confirm their positioning sentence (e.g., "This paper reviews early work in X").
 
-**Output:** A literature map document listing each reference with its cluster, priority tier, and intended citation location in the thesis structure.
+**Output:** A literature map document listing each reference with its cluster, relevance score, priority tier, and intended citation location in the thesis structure.
 
 ### Stage 3: Targeted Reading by Tier
 
@@ -163,6 +237,7 @@ Write the introduction and literature review according to the **user's prescribe
 | PDF is scanned/image-based | Flag it; read TOC or do targeted OCR on key pages only |
 | Monograph >200 pages | Extract TOC, identify 2-3 relevant chapters, ignore the rest |
 | User hasn't provided chapter structure | Ask for it in Stage 0 before writing; do not guess |
+| User hasn't provided research positioning | Ask for title/abstract/keywords in Stage 0; do not cluster blindly |
 | Reference is weakly related | Exclude from citation list; note it in the map as "tangential" |
 | User wants to "save tokens" | Emphasize the P0/P1/P2 tier system |
 | CAJ files detected | Instruct user to convert to PDF using CAJViewer or caj2pdf |
@@ -172,10 +247,11 @@ Write the introduction and literature review according to the **user's prescribe
 
 1. **Reading everything.** Agents often default to opening every file. This burns context and produces shallow understanding. Always extract metadata first.
 2. **No clustering.** Without thematic clusters, the literature review becomes a list of summaries rather than an argument. Clusters create the review's narrative arc.
-3. **Guessing the thesis structure.** If the user hasn't provided the exact heading hierarchy (e.g., 2.2.1 vs 2.2.2), ask in Stage 0 before writing. A mismatched structure requires full rewrite.
-4. **Ignoring weak references.** Weak or tangential references should be explicitly flagged and potentially excluded. Citing irrelevant papers damages credibility.
-5. **Skipping the gap analysis.** A literature review without a clear "what's missing → here's my study" transition fails its purpose. Stage 4 must end with the user's research positioning.
-6. **Skipping Stage 0 configuration.** Writing without confirming language, citation format, and chapter structure guarantees a mismatch with user expectations. Stage 0 is a hard prerequisite.
+3. **Clustering without user positioning.** Clustering based only on literature titles produces generic groupings. Without the user's research positioning (title/abstract/keywords), relevance scoring is pure guesswork and P0/P1/P2 tiers may be completely wrong.
+4. **Guessing the thesis structure.** If the user hasn't provided the exact heading hierarchy (e.g., 2.2.1 vs 2.2.2), ask in Stage 0 before writing. A mismatched structure requires full rewrite.
+5. **Ignoring weak references.** Weak or tangential references should be explicitly flagged and potentially excluded. Citing irrelevant papers damages credibility.
+6. **Skipping the gap analysis.** A literature review without a clear "what's missing → here's my study" transition fails its purpose. Stage 4 must end with the user's research positioning.
+7. **Skipping Stage 0 configuration.** Writing without confirming language, citation format, chapter structure, and research positioning guarantees a mismatch with user expectations. Stage 0 is a hard prerequisite.
 
 ## Reusable Tool
 
