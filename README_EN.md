@@ -18,7 +18,7 @@ Supports **custom chapter structures** or **default templates** (Chinese / Engli
   </tr>
   <tr>
     <td><b>0. Config</b></td>
-    <td>Confirm language, citation format, chapter structure, <b>research positioning</b> (title/abstract/keywords — any is fine)</td>
+    <td>Confirm language, citation format, chapter structure, <b>research positioning</b> (title/abstract/keywords — any is fine), <b>literature folder path</b></td>
     <td>Config checklist + user study positioning</td>
   </tr>
   <tr>
