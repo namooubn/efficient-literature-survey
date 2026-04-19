@@ -98,9 +98,12 @@ pip install -r requirements.txt
 | **Citation generation** | Auto-generates citations in GB/T 7714, APA, MLA, and numbered styles with journal/vol/issue/pages/DOI | Citations are ready for a real reference list |
 | **Incomplete citation marker** | Automatically appends `〔文献信息不完整，请手动补全〕` when journal/publisher/year is missing | Prevents "looks right but is wrong" citations |
 | **BibTeX export** | `--bibtex` outputs a `.bib` file with `@article`/`@book`/`@misc` auto-inference | Essential for LaTeX users |
+| **BibTeX LaTeX escaping** | Auto-escapes `& % $ # _ { } ~ ^ \` to prevent `.bib` compilation errors | LaTeX users |
 | **Recursive traversal** | Default `rglob("*")` discovers files in subfolders with `relative_path` preserved | Fits users who organize by topic/year |
 | **Structured error logging** | Extraction failures are recorded in report notes | No more silent failures |
 | **Scanned PDF guidance** | Report includes specific OCR tool recommendations (marker, nougat, tesseract) with install commands | Users know exactly what to do next |
+| **Metadata fallback** | When PDF `/Title` or `/Author` is empty, heuristically extracts title/author/year from first-page text | Reduces "incomplete metadata" false positives |
+| **Workflow checkpoint** | Writes `_els_stage.json` after Stage 1 so Claude can resume across multi-turn sessions | Supports long-running tasks with interruption recovery |
 
 ### Real-World Results
 
@@ -183,8 +186,9 @@ efficient-literature-survey/
 ├── requirements.txt                      # Runtime dependencies
 ├── pyproject.toml                        # Python package metadata and build config
 ├── core/
+│   ├── config.py                         # Centralized tunable constants (sampling thresholds, scan params)
 │   ├── constants.py                      # SUPPORTED_EXTS, CAJ_EXT, compound surname table
-│   ├── helpers.py                        # Core utilities (word count, scan detection, duplicates)
+│   ├── helpers.py                        # Core utilities (word count, scan detection, duplicates, metadata fallback)
 │   └── logging_config.py                 # Logging setup
 ├── extractors/
 │   ├── base.py                           # Result template factory
@@ -197,6 +201,8 @@ efficient-literature-survey/
 │   └── bibtex.py                         # BibTeX generator
 ├── cache/
 │   └── manager.py                        # Cache manager (version 2)
+├── checkpoint/
+│   └── manager.py                        # Workflow checkpoint persistence (multi-turn resume)
 └── report/
     └── generator.py                      # Markdown report generator
 ```

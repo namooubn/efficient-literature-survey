@@ -18,7 +18,15 @@ def _guess_bibtex_type(metadata: dict) -> str:
 
 
 def _bibtex_escape(s: str) -> str:
-    return s.replace("{", "\\{").replace("}", "\\}").replace("&", "\\&")
+    """Escape characters that break LaTeX compilation inside BibTeX fields."""
+    # Order matters: escape backslash first, then braces, then others.
+    s = s.replace("\\", "\\textbackslash{}")
+    s = s.replace("{", "\\{").replace("}", "\\}")
+    s = s.replace("$", "\\$").replace("&", "\\&")
+    s = s.replace("#", "\\#").replace("_", "\\_")
+    s = s.replace("^", "\\^{}").replace("~", "\\~{}")
+    s = s.replace("%", "\\%")
+    return s
 
 
 def generate_bibtex(results: list[dict]) -> str:

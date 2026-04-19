@@ -19,12 +19,20 @@ if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
 from cache.manager import file_sha256, load_cache, save_cache
+from checkpoint.manager import (
+    save_checkpoint,
+    load_checkpoint,
+    update_checkpoint_config,
+    is_checkpoint_valid,
+    CHECKPOINT_FILENAME,
+)
 from citation.bibtex import generate_bibtex, _guess_bibtex_type
 from citation.engine import generate_citation, _guess_doc_type
 from core.helpers import (
     detect_scanned_pdf,
     estimate_pages_from_chars,
     extract_bib_info_from_text,
+    extract_meta_fallback_from_text,
     find_duplicates,
     get_pdf_read_pages,
     safe_truncate,
@@ -815,6 +823,97 @@ class TestExtractEpubIntegration(unittest.TestCase):
             self.assertIn("Hello", info["first_page_text"])
         finally:
             os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Metadata fallback tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractMetaFallbackFromText(unittest.TestCase):
+    """Tests for first-page text metadata fallback heuristics."""
+
+    def test_extract_title_from_first_line(self):
+        text = "基于深度学习的自然语言处理研究进展\n作者：张三\n摘要：本文综述了..."
+        meta = extract_meta_fallback_from_text(text)
+        self.assertEqual(meta["title"], "基于深度学习的自然语言处理研究进展")
+
+    def test_extract_title_skips_too_short(self):
+        text = "OK\n这是一篇关于深度学习的论文标题，足够长\n作者：李四"
+        meta = extract_meta_fallback_from_text(text)
+        self.assertEqual(meta["title"], "这是一篇关于深度学习的论文标题，足够长")
+
+    def test_extract_author_from_marker(self):
+        text = "论文标题示例：基于 Transformer 的文本分类\n作者：王五\n单位：某某大学"
+        meta = extract_meta_fallback_from_text(text)
+        self.assertEqual(meta["author"], "王五")
+
+    def test_extract_author_english_marker(self):
+        text = "Title: Deep Learning Survey\nAuthor: John Smith\nAbstract: ..."
+        meta = extract_meta_fallback_from_text(text)
+        self.assertEqual(meta["author"], "John Smith")
+
+    def test_extract_year_from_text(self):
+        text = "发表于 2023 年的重要研究\n作者：赵六"
+        meta = extract_meta_fallback_from_text(text)
+        self.assertEqual(meta["year"], "2023")
+
+    def test_empty_text_returns_empty(self):
+        meta = extract_meta_fallback_from_text("")
+        self.assertEqual(meta["title"], "")
+        self.assertEqual(meta["author"], "")
+        self.assertEqual(meta["year"], "")
+
+    def test_no_author_marker_no_crash(self):
+        text = "只有标题没有作者标记的一篇论文题目"
+        meta = extract_meta_fallback_from_text(text)
+        self.assertEqual(meta["title"], "只有标题没有作者标记的一篇论文题目")
+        self.assertEqual(meta["author"], "")
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint tests
+# ---------------------------------------------------------------------------
+
+
+class TestCheckpointManager(unittest.TestCase):
+    """Tests for workflow checkpoint persistence."""
+
+    def test_roundtrip(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            cp = save_checkpoint(
+                output_dir=out,
+                stage=1,
+                lit_dir=Path("/refs"),
+                results_count=30,
+                config={"lang": "zh", "style": "gb7714"},
+            )
+            self.assertTrue(cp.exists())
+            loaded = load_checkpoint(out)
+            self.assertEqual(loaded["stage"], 1)
+            self.assertEqual(loaded["results_count"], 30)
+            self.assertEqual(loaded["config"]["lang"], "zh")
+
+    def test_missing_returns_empty(self):
+        loaded = load_checkpoint(Path("/nonexistent/checkpoint"))
+        self.assertEqual(loaded, {})
+
+    def test_is_checkpoint_valid(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            save_checkpoint(out, stage=1, lit_dir=Path("/refs"))
+            self.assertTrue(is_checkpoint_valid(out, Path("/refs"), expected_stage=1))
+            self.assertFalse(is_checkpoint_valid(out, Path("/refs"), expected_stage=2))
+            self.assertFalse(is_checkpoint_valid(out, Path("/other"), expected_stage=1))
+
+    def test_update_checkpoint_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            save_checkpoint(out, stage=1, lit_dir=Path("/refs"), config={"a": 1})
+            update_checkpoint_config(out, b=2)
+            loaded = load_checkpoint(out)
+            self.assertEqual(loaded["config"], {"a": 1, "b": 2})
 
 
 if __name__ == "__main__":

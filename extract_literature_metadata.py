@@ -26,6 +26,7 @@ if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
 from cache.manager import file_sha256, load_cache, save_cache
+from checkpoint.manager import save_checkpoint
 from citation.engine import generate_citation
 from citation.bibtex import generate_bibtex
 from core.constants import SUPPORTED_EXTS, CAJ_EXT
@@ -241,12 +242,15 @@ def main():
             )
         results.extend(extracted)
 
+    # Build a lookup once, reuse for both path-fixup and cache update
+    path_map = {str(lf.relative_to(lit_dir)): lf for lf in lit_files}
+
     # Also set relative_path for cached results if missing
     for r in results:
         if not r.get("relative_path"):
-            for lf in lit_files:
+            for rel, lf in path_map.items():
                 if lf.name == r.get("filename"):
-                    r["relative_path"] = str(lf.relative_to(lit_dir))
+                    r["relative_path"] = rel
                     break
 
     # Update cache with fresh results (keyed by relative path)
@@ -254,18 +258,16 @@ def main():
     for r in results:
         rel_path = r.get("relative_path", "")
         if not rel_path:
-            for lf in lit_files:
+            for rel, lf in path_map.items():
                 if lf.name == r.get("filename"):
-                    rel_path = str(lf.relative_to(lit_dir))
+                    rel_path = rel
                     break
-        if rel_path:
-            for lf in lit_files:
-                if str(lf.relative_to(lit_dir)) == rel_path:
-                    new_cache[rel_path] = {
-                        "sha256": file_sha256(str(lf)),
-                        "result": r,
-                    }
-                    break
+        lf = path_map.get(rel_path)
+        if lf:
+            new_cache[rel_path] = {
+                "sha256": file_sha256(str(lf)),
+                "result": r,
+            }
     save_cache(cache_path, new_cache)
 
     # Duplicate detection
@@ -321,6 +323,14 @@ def main():
         with open(bib_path, "w", encoding="utf-8") as f:
             f.write(generate_bibtex(results))
         logging.info("BibTeX 文件已保存：%s", bib_path)
+
+    # Persist workflow checkpoint for multi-turn Claude sessions
+    save_checkpoint(
+        output_dir=output_dir,
+        stage=1,
+        lit_dir=lit_dir,
+        results_count=len(results),
+    )
 
 
 if __name__ == "__main__":

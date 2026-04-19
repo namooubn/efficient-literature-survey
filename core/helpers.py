@@ -8,6 +8,28 @@ import re
 from pathlib import Path
 
 from .constants import _COMPOUND_SURNAMES
+from .config import (
+    BIB_TEXT_SCAN_LINES,
+    CHARS_PER_PAGE,
+    DOCX_SAMPLE_CHARS,
+    DOCX_TABLE_SAMPLE_COUNT,
+    EPUB_BIB_SAMPLE_CHARS,
+    EPUB_DOCUMENT_SAMPLE_COUNT,
+    LONG_DOC_HEAD_PAGES,
+    LONG_DOC_TAIL_PAGES,
+    META_TITLE_CANDIDATE_LINES,
+    META_TITLE_MAX_LEN,
+    META_TITLE_MIN_LEN,
+    PDF_FALLBACK_TEXT_CHARS,
+    SCANNED_DENSITY_THRESHOLD,
+    SCANNED_EMPTY_RATIO,
+    SCANNED_MIN_CHARS_PAGE,
+    SCANNED_TOTAL_CHARS_HARD,
+    SCANNED_TOTAL_CHARS_MAX,
+    SHORT_DOC_THRESHOLD,
+    TEXT_TRUNCATE_LIMIT,
+    TXT_BIB_SAMPLE_CHARS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -15,7 +37,7 @@ from .constants import _COMPOUND_SURNAMES
 # ---------------------------------------------------------------------------
 
 
-def safe_truncate(text: str, limit: int = 2000) -> str:
+def safe_truncate(text: str, limit: int = TEXT_TRUNCATE_LIMIT) -> str:
     return text[:limit] if text else ""
 
 
@@ -31,6 +53,59 @@ def smart_word_count(text: str) -> int:
     if len(cn_chars) == 0:
         return len(text.split())
     return len(cn_chars) + len(en_tokens)
+
+
+# ---------------------------------------------------------------------------
+# Metadata extraction fallback from first-page text
+# ---------------------------------------------------------------------------
+
+
+def extract_meta_fallback_from_text(text: str) -> dict:
+    """
+    Attempt to extract title and author from the first-page / front-matter text
+    when document metadata fields are empty.
+
+    Returns {"title": "", "author": "", "year": ""}.
+    """
+    result = {"title": "", "author": "", "year": ""}
+    if not text:
+        return result
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return result
+
+    # Title heuristic: pick the longest line among the first few that
+    # falls inside the allowed length window and isn't pure numeric.
+    candidates = []
+    for ln in lines[:META_TITLE_CANDIDATE_LINES]:
+        ln_stripped = ln.replace(" ", "").replace("\t", "")
+        if (
+            META_TITLE_MIN_LEN <= len(ln_stripped) <= META_TITLE_MAX_LEN
+            and not ln_stripped.isdigit()
+        ):
+            candidates.append(ln)
+    if candidates:
+        # Prefer the longest candidate as the title
+        result["title"] = max(candidates, key=len)
+
+    # Author heuristic: look for explicit markers
+    author_patterns = [
+        r"(?:作者|Author|Authors)[:：\s]+(.{2,80})",
+        r"(?:著者|Writer|by)[:：\s]+(.{2,80})",
+    ]
+    for pat in author_patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            result["author"] = m.group(1).strip()
+            break
+
+    # Year heuristic: try to extract a 4-digit year from text
+    year_match = re.search(r"\b(19|20)\d{2}\b", text)
+    if year_match:
+        result["year"] = year_match.group(0)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +129,9 @@ def split_chinese_name(name: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def estimate_pages_from_chars(char_count: int, chars_per_page: int = 500) -> int:
+def estimate_pages_from_chars(
+    char_count: int, chars_per_page: int = CHARS_PER_PAGE
+) -> int:
     """Estimate page count for text-based files where true pagination is unknown."""
     return max(1, math.ceil(char_count / chars_per_page))
 
@@ -63,16 +140,17 @@ def get_pdf_read_pages(total_pages: int, max_pages: int = 0) -> list[int]:
     """
     Decide which pages to read based on document length.
 
-    - Short docs (<= 50 pages): read all pages.
-    - Long docs (> 50 pages): read first 15 + last 5 pages.
+    - Short docs (<= SHORT_DOC_THRESHOLD pages): read all pages.
+    - Long docs (> SHORT_DOC_THRESHOLD pages): read first LONG_DOC_HEAD_PAGES
+      + last LONG_DOC_TAIL_PAGES pages.
     - max_pages > 0 overrides the heuristic.
     """
     if max_pages > 0:
         return list(range(min(total_pages, max_pages)))
-    if total_pages <= 50:
+    if total_pages <= SHORT_DOC_THRESHOLD:
         return list(range(total_pages))
-    pages = list(range(min(15, total_pages)))
-    pages.extend(range(max(0, total_pages - 5), total_pages))
+    pages = list(range(min(LONG_DOC_HEAD_PAGES, total_pages)))
+    pages.extend(range(max(0, total_pages - LONG_DOC_TAIL_PAGES), total_pages))
     return sorted(set(pages))
 
 
@@ -90,7 +168,7 @@ def detect_scanned_pdf(read_page_texts: list[str], total_pages: int) -> bool:
         return False
 
     total_chars = sum(len(t) for t in read_page_texts)
-    if total_chars > 8000:
+    if total_chars > SCANNED_TOTAL_CHARS_MAX:
         return False
 
     read_count = len(read_page_texts)
@@ -105,15 +183,15 @@ def detect_scanned_pdf(read_page_texts: list[str], total_pages: int) -> bool:
             indices.append(end)
 
     sampled = [read_page_texts[i] for i in indices if i < read_count]
-    empty_samples = sum(1 for t in sampled if len(t.strip()) < 25)
-    if len(sampled) >= 2 and empty_samples / len(sampled) >= 0.66:
+    empty_samples = sum(1 for t in sampled if len(t.strip()) < SCANNED_MIN_CHARS_PAGE)
+    if len(sampled) >= 2 and empty_samples / len(sampled) >= SCANNED_EMPTY_RATIO:
         return True
 
     density = total_chars / read_count if read_count > 0 else 0
-    if density < 12 and read_count > 3:
+    if density < SCANNED_DENSITY_THRESHOLD and read_count > 3:
         return True
 
-    if total_chars < 50:
+    if total_chars < SCANNED_TOTAL_CHARS_HARD:
         return True
 
     return False
@@ -179,7 +257,7 @@ def extract_bib_info_from_text(text: str) -> dict:
     if cn_journal:
         info["journal"] = cn_journal.group(1).strip()
 
-    for line in text.splitlines()[:15]:
+    for line in text.splitlines()[:BIB_TEXT_SCAN_LINES]:
         line = line.strip()
         if 10 < len(line) < 80 and line.isupper() and line.replace(" ", "").isalpha():
             if not info["journal"]:

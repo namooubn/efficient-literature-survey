@@ -102,9 +102,12 @@ pip install -r requirements.txt
 | **规范引用生成** | 支持 GB/T 7714、APA、MLA、编号四种格式，含期刊/卷期页/DOI | 引用可直接用于论文参考文献列表 |
 | **不完整引用标记** | 当期刊/出版社/年份缺失时，自动标注 `〔文献信息不完整，请手动补全〕` | 避免引用格式"形似神不似" |
 | **BibTeX 导出** | `--bibtex` 一键生成 `.bib` 文件，支持 `@article`/`@book`/`@misc` | LaTeX 用户刚需 |
+| **BibTeX LaTeX 转义** | 自动转义 `& % $ # _ { } ~ ^ \` 等特殊字符，避免 `.bib` 编译报错 | LaTeX 用户刚需 |
 | **子文件夹递归** | 默认递归遍历所有子文件夹，保留相对路径结构 | 适合按主题/年份组织文献的用户 |
 | **结构化异常记录** | 提取失败时记录错误类型到报告备注栏 | 不再静默失败 |
 | **扫描件 OCR 指引** | 检测到扫描 PDF 时，报告内附 marker/nougat/tesseract 安装命令 | 用户知道下一步该做什么 |
+| **元数据 fallback** | PDF `/Title`、`/Author` 为空时，自动从首行文本启发式提取标题/作者/年份 | 大幅降低"文献信息不完整"误报 |
+| **工作流 checkpoint** | Stage 1 完成后写入 `_els_stage.json`，Claude 可在多轮对话中断后恢复状态 | 支持长时间任务断点续作 |
 
 ### 真实数据闭环
 
@@ -189,8 +192,9 @@ efficient-literature-survey/
 ├── requirements.txt                      # 运行时依赖
 ├── pyproject.toml                        # Python 包元数据与构建配置
 ├── core/
+│   ├── config.py                         # 所有可调常量集中配置（采样阈值、扫描检测参数等）
 │   ├── constants.py                      # SUPPORTED_EXTS, CAJ_EXT, 复姓表
-│   ├── helpers.py                        # 核心工具函数（字数统计、扫描检测、重复检测等）
+│   ├── helpers.py                        # 核心工具函数（字数统计、扫描检测、重复检测、元数据 fallback 等）
 │   └── logging_config.py                 # 日志配置
 ├── extractors/
 │   ├── base.py                           # 结果模板工厂
@@ -203,6 +207,8 @@ efficient-literature-survey/
 │   └── bibtex.py                         # BibTeX 生成器
 ├── cache/
 │   └── manager.py                        # 缓存管理（version 2）
+├── checkpoint/
+│   └── manager.py                        # 工作流 checkpoint 持久化（多轮对话断点续作）
 └── report/
     └── generator.py                      # Markdown 报告生成
 ```

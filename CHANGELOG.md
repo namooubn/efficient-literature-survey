@@ -20,8 +20,12 @@ All notable changes to this project will be documented in this file.
 - **Enhanced scanned-PDF guidance**: Markdown report now appends a blockquote with specific OCR tool recommendations (`marker`, `nougat`, `pdf2image + pytesseract`) and installation/usage commands.
 - **Test coverage expanded**: 79 unit and integration tests (was 52), covering citation formats, BibTeX generation, bibliographic regex extraction, compound surnames, logging setup, and document-type heuristics.
 - **`argparse`-based CLI argument parsing**: Replaced the hand-rolled `while` loop argument parser with `argparse.ArgumentParser`. All existing short/long flags (`-m`, `-c`, `-o`, `-b`, `-v`, `-q`, `--no-recursive`) remain unchanged; adds automatic `--help` generation and strict type/choice validation.
-- **Package `__init__.py` files**: Added `__init__.py` to `core/`, `extractors/`, `citation/`, `cache/`, and `report/` so the module tree is recognized as a proper Python package.
+- **Package `__init__.py` files**: Added `__init__.py` to `core/`, `extractors/`, `citation/`, `cache/`, `checkpoint/`, and `report/` so the module tree is recognized as a proper Python package.
 - **Dependency declaration files**: Added `requirements.txt` (runtime deps with minimum versions) and `pyproject.toml` (PEP 621 project metadata + build-system + CLI entry-point).
+- **Centralized configuration (`core/config.py`)**: All previously hard-coded heuristic constants (page thresholds, scan-detection limits, text-sampling sizes, citation thresholds) are now defined in one place. Users and developers can tune behavior without hunting through `helpers.py` and extractors.
+- **Metadata fallback heuristics (`extract_meta_fallback_from_text`)**: When PDF `/Title` or `/Author` metadata is empty, the system now falls back to extracting title, author, and year from the first-page text using heuristic rules (title-length windowing, author-marker regexes, year extraction). Reduces "incomplete metadata" false positives significantly.
+- **Workflow checkpoint persistence (`checkpoint/manager.py`)**: After Stage 1 finishes, `_els_stage.json` is written to the output directory containing stage number, literature folder path, result count, and optional Stage 0 config. Enables Claude to resume multi-turn sessions without re-running extraction.
+- **Test coverage expanded**: Added `TestExtractMetaFallbackFromText` (6 cases) and `TestCheckpointManager` (4 cases). Total test count: 92+ → 103.
 
 ### Changed
 
@@ -41,14 +45,17 @@ All notable changes to this project will be documented in this file.
 - Chinese-name APA/MLA formatting failed for names without spaces (e.g., `欧阳明` was not recognized as `欧阳, M.`).
 - `logging.basicConfig()` did not override existing handlers when called multiple times (e.g., in test suites).
 - Cross-subfolder cache key collision: previously used `lf.name` (bare filename) as cache key, causing false hits for identically-named files in different subfolders. Now uses `str(lf.relative_to(lit_dir))` (relative path) as cache key.
+- Cache update logic reduced from O(n³) to O(n) by pre-building a `path_map` dict, eliminating redundant nested loops over `lit_files` during cache writes.
+- BibTeX export now escapes LaTeX special characters (`\ { } $ & # _ ^ ~ %`) to prevent `.bib` compilation failures.
 
 ### Refactored
 
 - **Modular architecture**: Split the 1,282-line monolithic `extract_literature_metadata.py` into a clean module structure:
-  - `core/` — constants, helpers, logging config
+  - `core/` — constants, config, helpers, logging config
   - `extractors/` — format-specific extractors (PDF/DOCX/TXT/EPUB) with module-level lazy imports for optional dependencies
   - `citation/` — citation engine + BibTeX generator
   - `cache/` — cache manager (upgraded to version 2)
+  - `checkpoint/` — workflow checkpoint persistence for multi-turn sessions
   - `report/` — Markdown report generator
   - `extract_literature_metadata.py` remains the CLI entry point for full backward compatibility.
 

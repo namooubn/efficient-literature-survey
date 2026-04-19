@@ -1,6 +1,7 @@
 """EPUB metadata and text extraction."""
 
 from .base import make_result_template
+from core.config import EPUB_BIB_SAMPLE_CHARS, EPUB_DOCUMENT_SAMPLE_COUNT
 from core.helpers import (
     estimate_pages_from_chars,
     extract_bib_info_from_text,
@@ -46,7 +47,7 @@ def extract_epub(epub_path: str) -> dict:
                 if text:
                     all_texts.append(text)
                     count += 1
-                if count >= 10:
+                if count >= EPUB_DOCUMENT_SAMPLE_COUNT:
                     break
 
         full_text = "\n".join(all_texts)
@@ -55,7 +56,7 @@ def extract_epub(epub_path: str) -> dict:
         result["first_page_text"] = safe_truncate(full_text)
         result["pages"] = estimate_pages_from_chars(result["text_chars"])
 
-        bib_info = extract_bib_info_from_text(full_text[:3000])
+        bib_info = extract_bib_info_from_text(full_text[:EPUB_BIB_SAMPLE_CHARS])
         result.update(bib_info)
 
     except Exception as e:

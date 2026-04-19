@@ -2,6 +2,7 @@
 
 import re
 
+from core.config import MONOGRAPH_PAGE_THRESHOLD
 from core.helpers import split_chinese_name
 
 
@@ -17,7 +18,7 @@ def _guess_doc_type(metadata: dict) -> str:
     """Guess document type code for GB/T 7714."""
     fmt = metadata.get("format", "").lower()
     pages = metadata.get("pages", 0)
-    if pages > 200:
+    if pages > MONOGRAPH_PAGE_THRESHOLD:
         return "M"
     if fmt == "epub":
         return "M"

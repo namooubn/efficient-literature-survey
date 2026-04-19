@@ -1,6 +1,7 @@
 """DOCX metadata and text extraction."""
 
 from .base import make_result_template
+from core.config import DOCX_SAMPLE_CHARS, DOCX_TABLE_SAMPLE_COUNT
 from core.helpers import (
     estimate_pages_from_chars,
     extract_bib_info_from_text,
@@ -35,7 +36,7 @@ def extract_docx(docx_path: str) -> dict:
         for p in doc.paragraphs:
             paragraphs.append(p)
             char_count += len(p.text)
-            if char_count >= 5000:
+            if char_count >= DOCX_SAMPLE_CHARS:
                 break
         full_text = "\n".join(p.text for p in paragraphs)
         result["text_chars"] = len(full_text)
@@ -44,7 +45,7 @@ def extract_docx(docx_path: str) -> dict:
         result["pages"] = estimate_pages_from_chars(result["text_chars"])
 
         table_texts = []
-        for table in doc.tables[:5]:
+        for table in doc.tables[:DOCX_TABLE_SAMPLE_COUNT]:
             for row in table.rows:
                 for cell in row.cells:
                     if cell.text.strip():

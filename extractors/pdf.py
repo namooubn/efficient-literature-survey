@@ -3,9 +3,11 @@
 import re
 
 from .base import make_result_template
+from core.config import PDF_FALLBACK_TEXT_CHARS
 from core.helpers import (
     detect_scanned_pdf,
     extract_bib_info_from_text,
+    extract_meta_fallback_from_text,
     get_pdf_read_pages,
     safe_truncate,
     smart_word_count,
@@ -67,7 +69,7 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
         result["note"] += f"PyPDF2 error: {type(e).__name__}: {e}; "
 
     # Fallback to pdfplumber if PyPDF2 extracted very little text
-    if result["text_chars"] < 500 and result["pages"] > 0 and pdfplumber is not None:
+    if result["text_chars"] < PDF_FALLBACK_TEXT_CHARS and result["pages"] > 0 and pdfplumber is not None:
         try:
             with pdfplumber.open(pdf_path) as pdf:
                 result["pages"] = len(pdf.pages)
@@ -92,7 +94,17 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
     bib_info = extract_bib_info_from_text(result["first_page_text"])
     result.update(bib_info)
 
-    # Fallback: extract year from filename if not found in metadata
+    # Fallback: extract title/author/year from first-page text when metadata is empty
+    if not result.get("title_from_meta") or not result.get("author_from_meta") or not result.get("year"):
+        fallback = extract_meta_fallback_from_text(result["first_page_text"])
+        if not result.get("title_from_meta"):
+            result["title_from_meta"] = fallback["title"]
+        if not result.get("author_from_meta"):
+            result["author_from_meta"] = fallback["author"]
+        if not result.get("year"):
+            result["year"] = fallback["year"]
+
+    # Fallback: extract year from filename if still not found
     if not result.get("year"):
         m = re.search(r"\b(19|20)\d{2}\b", result["filename"])
         if m:

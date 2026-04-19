@@ -1,6 +1,7 @@
 """Plain-text (TXT / MD) extraction."""
 
 from .base import make_result_template
+from core.config import TXT_BIB_SAMPLE_CHARS
 from core.helpers import (
     estimate_pages_from_chars,
     extract_bib_info_from_text,
@@ -32,7 +33,7 @@ def extract_txt(txt_path: str) -> dict:
     result["first_page_text"] = safe_truncate(content)
     result["pages"] = estimate_pages_from_chars(result["text_chars"])
 
-    bib_info = extract_bib_info_from_text(content[:3000])
+    bib_info = extract_bib_info_from_text(content[:TXT_BIB_SAMPLE_CHARS])
     result.update(bib_info)
 
     return result
