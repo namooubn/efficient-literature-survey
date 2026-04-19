@@ -15,10 +15,18 @@ All notable changes to this project will be documented in this file.
 - **Citation generation**: `generate_citation()` produces formatted citations in GB/T 7714, APA, MLA, and numbered styles. Citations are embedded in JSON (`citation` field) and appended to the Markdown report.
 - **Integration tests**: Added `TestExtractPdf`, `TestExtractDocx`, `TestExtractTxt`, `TestExtractEpub`, `TestGetPdfReadPages`, `TestFindDuplicates`, and `TestGenerateCitation` — 28 additional test cases with conditional `skipUnless` for optional dependencies.
 - **Context overflow guards in SKILL.md**: Added `[CONTEXT_OVERFLOW]` rules for Stage 2 (batch clustering when >40 refs) and Stage 3 (auto-downgrade P1 to abstract-only when P0+P1 exceeds 100k words).
+- **`--output-dir` CLI flag**: Added `-o PATH` / `--output-dir PATH` to specify output directory. Defaults to `.els_output/` subfolder inside the literature folder, preventing intermediate files from polluting the user's reference folder.
+- **Year extraction in citations**: PDF metadata `/CreationDate` is now parsed for year; falls back to filename pattern matching (`19xx`/`20xx`). Citations in GB/T 7714, APA, and MLA now include the year field.
+- **`## Tool Use` section in SKILL.md**: Added explicit Bash/Read/Write tool usage instructions, including concrete command formats and per-tier reading strategies (P0 full-text with structure scan, P1 abstract+keyword-targeted sections, P2 abstract-only).
 
 ### Changed
 
-- **SKILL.md trigger description**: Split long trigger list into a concise `description` field + a dedicated `## Triggers` section for better Claude Code skill matching.
+- **SKILL.md trigger description**: Removed misleading `/efficient-literature-survey` slash command claim (user-installed skills do not support custom slash commands). Replaced with natural-language trigger guidance. README and README_EN updated accordingly.
+- **SKILL.md Stage 3 reading strategy**: Replaced abstract instructions with concrete Read-tool steps (structure scan → full text or targeted chapters per tier) to reduce Claude's free-form interpretation.
+- **DOCX text sampling strategy**: Changed from first 30 paragraphs to first ~5000 characters, preventing metadata loss on long documents where front matter exceeds 30 paragraphs.
+- **Scanned-PDF detection reliability**: `_detect_scanned_pdf()` now receives only actually-read page texts instead of a full-length list padded with empty strings, eliminating false positives on long documents where unread pages defaulted to empty.
+- **Import organization**: Moved `import difflib` from mid-function to top-level imports.
+- **Cache/output path isolation**: `_literature_cache.json`, `_literature_extraction.json`, and `_literature_report.md` now write to the configured output directory instead of the literature folder root.
 - **Error handling**: Replaced silent `except Exception: pass` with structured error logging into `result["note"]` so extraction failures are visible in reports.
 - **CLI arguments**: Added `--max-pages` (`-m`) to override PDF page-reading limits and `--citation-style` (`-c`) to choose between `gb7714`, `apa`, `mla`, and `numbered`.
 - **JSON output structure**: Wrapped results in a top-level object with `citation_style`, `max_pages`, `duplicates`, and `results` keys for richer downstream consumption.

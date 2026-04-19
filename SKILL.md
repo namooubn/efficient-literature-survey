@@ -20,7 +20,6 @@ Natural-language triggers that activate this skill:
 - "帮我写文献综述", "批量读PDF写论文"
 - "literature review", "thesis introduction", "batch read papers", "write my literature review"
 - "efficient literature survey", "save tokens reading papers"
-- Typing `/efficient-literature-survey`
 - User has a folder of literature files and needs structured academic output
 
 ## When to Use
@@ -236,18 +235,22 @@ Show the user:
 - P2 仅摘要 Z 篇
 如果某篇你想调整阅读深度，直接告诉我。"
 
-**For P0 references:**
-- Use Read tool on the full text (if extracted) or key chapters.
-- Extract: core argument, key quotations, theoretical lineage, methodological approach.
+**For P0 references (full-text or structured read):**
+1. Use the Read tool to open the file. Read the first 2,000 characters to identify structure (abstract, sections, methodology).
+2. If the full text is ≤ 50,000 characters, read the entire file with Read.
+3. If the full text is > 50,000 characters, read the abstract + conclusion first, then use Read on 2-3 key chapters identified from the structure scan.
+4. Extract: core argument, 2-3 direct quotations, theoretical lineage, methodological approach.
 
-**For P1 references:**
-- Read abstract and conclusion.
-- Search within the document for keywords matching the user's research question.
-- Extract: 2-3 sentences summarizing contribution + how it connects to the user's gap.
+**For P1 references (abstract + keyword-targeted sections):**
+1. Use the Read tool to read the first 2,000 characters (typically covers abstract + introduction).
+2. Use the Read tool again to read the last 1,500 characters (conclusion / discussion).
+3. If keywords from the user's research question appear in the preview text, use Read to extract the matched sections (± 500 characters around each match).
+4. Extract: 2-3 sentences summarizing contribution + how it connects to the user's research gap.
 
-**For P2 references:**
-- Confirm from abstract: what does this paper do? Where does it fit in the map?
-- Write a one-sentence positioning note.
+**For P2 references (abstract only):**
+1. Use the Read tool to read the first 1,000 characters (abstract).
+2. Confirm: what does this paper do? Where does it fit in the thematic map?
+3. Write a one-sentence positioning note.
 
 **Context overflow guard — [CONTEXT_OVERFLOW] in Stage 3:**
 If the combined full-text word count of all P0 + P1 references exceeds 100,000 words (~300k chars):
@@ -363,6 +366,49 @@ This shows a realistic multi-turn interaction that demonstrates the workflow and
 > 3. 是否有文献引用遗漏或错配？
 > 4. 研究空白的论述是否准确？
 > 告诉我具体修改意见，我会逐条调整。
+
+## Tool Use
+
+This skill requires the following tool usage patterns:
+
+### Bash — Run the extraction script
+
+**When to use:** At the start of Stage 1, after the user has provided the literature folder path.
+
+**Command format:**
+```bash
+python extract_literature_metadata.py <folder_path> [--max-pages N] [--citation-style STYLE] [--output-dir PATH]
+```
+
+**Examples:**
+```bash
+python extract_literature_metadata.py /Users/alice/Documents/references
+python extract_literature_metadata.py D:\论文\references -c apa -o D:\论文\els_output
+```
+
+**Rules:**
+- Always use the full path (expand `~` if needed).
+- If the script reports missing dependencies, ask the user to run `pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4`.
+- Read the generated `_literature_report.md` to present results to the user.
+
+### Read — Read individual papers by tier
+
+**When to use:** During Stage 3 (Targeted Reading), for P0 and P1 references.
+
+**Strategy per tier:**
+- **P0 (Core):** Read the full text if ≤ 50,000 characters. If longer, read the first 2,000 characters to identify structure, then read key chapters/sections.
+- **P1 (Support):** Read the first 2,000 characters (usually abstract + intro), then search for keywords matching the user's research question. Read matched sections only.
+- **P2 (Background):** Read the first 1,000 characters (abstract) only.
+
+**Context overflow guard:** If combined P0 + P1 text exceeds 100,000 characters, downgrade all P1 to "abstract only" and keep only top 5 P0 references for full reading.
+
+### Write — Save the literature map and draft
+
+**When to use:** After Stage 2 (clustering) and Stage 4 (writing).
+
+**Files to write:**
+- `_literature_map.md` — cluster assignments, relevance scores, and reading plan
+- `_thesis_introduction.md` and/or `_literature_review.md` — Stage 4 output
 
 ## Quick Reference
 

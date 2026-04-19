@@ -130,6 +130,7 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 CLI flags:
 - `--max-pages N` / `-m N`: Force read only the first N pages (overrides smart paging)
 - `--citation-style gb7714|apa|mla|numbered` / `-c STYLE`: Choose citation format (default: gb7714)
+- `--output-dir PATH` / `-o PATH`: Specify output directory (default: `.els_output/` subfolder inside the literature folder)
 
 Interactive CLI features:
 - No arguments → prompts for path interactively
@@ -143,8 +144,6 @@ Outputs:
 ... Supports mixed folders of PDF / DOCX / TXT / MD / EPUB
 
 **Via Claude Code Skill:**
-
-**Direct trigger (recommended):** Type `/efficient-literature-survey` in the input box and press Enter.
 
 **Natural language triggers:**
 - "Help me read papers and write an introduction and literature review"
@@ -168,7 +167,6 @@ If you don't use Claude Code, you can still use the **Python script standalone**
 efficient-literature-survey/
 ├── SKILL.md                              # Core skill document for Claude (Claude Code only)
 ├── extract_literature_metadata.py        # Standalone batch extraction script (any Python env)
-├── extract_pdf_metadata.py             # Legacy PDF-only script (backward compatible)
 ├── test_extract_literature_metadata.py # Unit tests (52 test cases)
 ├── CHANGELOG.md                        # Version changelog
 ├── README.md                           # Chinese version

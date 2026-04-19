@@ -11,15 +11,16 @@ Dependencies:
     pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 """
 
-import os
-import sys
+import difflib
+import hashlib
 import json
 import math
+import os
 import re
-import hashlib
-from pathlib import Path
-from datetime import datetime
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -55,42 +56,44 @@ def _smart_word_count(text: str) -> int:
     return len(cn_chars) + len(en_tokens)
 
 
-def _detect_scanned_pdf(page_texts: list, total_pages: int) -> bool:
+def _detect_scanned_pdf(read_page_texts: list[str], total_pages: int) -> bool:
     """
     Multi-page sampling heuristic for scanned/image-based PDF detection.
-    Samples pages at beginning, middle, and end to avoid false positives
-    from cover pages or front matter that are image-only.
+    Only considers pages that were actually read (read_page_texts), avoiding
+    false positives from unread pages that default to empty strings.
     """
-    if total_pages <= 1 or not page_texts:
+    if total_pages <= 1 or not read_page_texts:
         return False
 
-    total_chars = sum(len(t) for t in page_texts)
+    total_chars = sum(len(t) for t in read_page_texts)
 
     # Fast path: very high text volume = definitely not scanned
     if total_chars > 8000:
         return False
 
-    # Sample pages at beginning, middle, and end
+    read_count = len(read_page_texts)
+
+    # Sample pages at beginning, middle, and end of the READ pages
     indices = [0]
-    if total_pages > 3:
-        mid = min(total_pages // 2, len(page_texts) - 1)
+    if read_count > 3:
+        mid = read_count // 2
         if mid > 0:
             indices.append(mid)
-    if total_pages > 5:
-        end = min(total_pages - 1, len(page_texts) - 1)
+    if read_count > 5:
+        end = read_count - 1
         if end not in indices:
             indices.append(end)
 
-    sampled = [page_texts[i] for i in indices if i < len(page_texts)]
+    sampled = [read_page_texts[i] for i in indices if i < read_count]
     empty_samples = sum(1 for t in sampled if len(t.strip()) < 25)
 
     # If majority of sampled pages are nearly empty, likely scanned
     if len(sampled) >= 2 and empty_samples / len(sampled) >= 0.66:
         return True
 
-    # Fallback: very low text density across all sampled pages
-    density = total_chars / total_pages if total_pages > 0 else 0
-    if density < 12 and total_pages > 3:
+    # Fallback: very low text density across all read pages
+    density = total_chars / read_count if read_count > 0 else 0
+    if density < 12 and read_count > 3:
         return True
 
     # Extra fallback: original single-threshold for short docs
@@ -123,8 +126,6 @@ def _get_pdf_read_pages(total_pages: int, max_pages: int = 0) -> list[int]:
 # ---------------------------------------------------------------------------
 # Duplicate detection
 # ---------------------------------------------------------------------------
-
-import difflib  # noqa: E402
 
 
 def _find_duplicates(results: list[dict], threshold: float = 0.80) -> dict[str, list[str]]:
@@ -188,6 +189,9 @@ def generate_citation(metadata: dict, style: str = "numbered") -> str:
     authors = _normalize_author(author_raw)
     fmt = metadata.get("format", "").upper()
 
+    year = metadata.get("year", "")
+    year_part = f", {year}" if year else ""
+
     if style == "gb7714":
         if not authors:
             author_str = "佚名"
@@ -199,7 +203,7 @@ def generate_citation(metadata: dict, style: str = "numbered") -> str:
             author_str = f"{authors[0]}, {authors[1]}, {authors[2]}"
         else:
             author_str = f"{authors[0]} 等"
-        return f"[{author_str}]. {title}[{fmt}]."
+        return f"[{author_str}]. {title}[{fmt}]{year_part}."
 
     if style == "apa":
         if not authors:
@@ -210,7 +214,7 @@ def generate_citation(metadata: dict, style: str = "numbered") -> str:
             author_str = f"{_apa_name(authors[0])} & {_apa_name(authors[1])}"
         else:
             author_str = f"{_apa_name(authors[0])} et al."
-        return f"{author_str} {title}."
+        return f"{author_str}{year_part}. {title}."
 
     if style == "mla":
         if not authors:
@@ -219,7 +223,7 @@ def generate_citation(metadata: dict, style: str = "numbered") -> str:
             author_str = _mla_name(authors[0])
             if len(authors) > 1:
                 author_str += f", et al."
-        return f'"{title}." {author_str}.'
+        return f'"{title}." {author_str}{year_part}.'
 
     # default numbered
     return f"[{metadata.get('_citation_number', '')}] {title}"
@@ -344,15 +348,20 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
         if meta:
             result["author_from_meta"] = str(meta.get("/Author", ""))
             result["title_from_meta"] = str(meta.get("/Title", ""))
+            # Extract year from /CreationDate (e.g., D:20240115120000Z)
+            creation_date = str(meta.get("/CreationDate", ""))
+            m = re.search(r'D:(\d{4})', creation_date)
+            if m:
+                result["year"] = m.group(1)
 
         read_pages = _get_pdf_read_pages(result["pages"], max_pages)
-        page_texts: list[str] = [""] * result["pages"]
+        read_page_texts: list[str] = []
         total_text = ""
         for i in read_pages:
             try:
                 page = reader.pages[i]
                 txt = page.extract_text() or ""
-                page_texts[i] = txt
+                read_page_texts.append(txt)
                 total_text += txt
                 if i == 0:
                     result["first_page_text"] = _safe_truncate(txt)
@@ -362,7 +371,7 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
                 result["note"] += f"Page {i} extract error: {type(e).__name__}; "
         result["text_chars"] = len(total_text)
     except Exception as e:
-        page_texts = []
+        read_page_texts = []
         if not result["note"]:
             result["note"] = ""
         result["note"] += f"PyPDF2 error: {type(e).__name__}: {e}; "
@@ -374,11 +383,11 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
             with pdfplumber.open(pdf_path) as pdf:
                 result["pages"] = len(pdf.pages)
                 read_pages = _get_pdf_read_pages(result["pages"], max_pages)
-                page_texts = [""] * result["pages"]
+                read_page_texts = []
                 total_text = ""
                 for i in read_pages:
                     txt = pdf.pages[i].extract_text() or ""
-                    page_texts[i] = txt
+                    read_page_texts.append(txt)
                     total_text += txt
                     if i == 0:
                         result["first_page_text"] = _safe_truncate(txt)
@@ -390,8 +399,14 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
 
     result["word_count"] = _smart_word_count(total_text) if result["text_chars"] > 0 else 0
 
-    # Scanned-image detection heuristic (PDF only) — multi-page sampling
-    result["is_scanned"] = _detect_scanned_pdf(page_texts, result["pages"])
+    # Fallback: extract year from filename if not found in metadata
+    if not result.get("year"):
+        m = re.search(r'\b(19|20)\d{2}\b', result["filename"])
+        if m:
+            result["year"] = m.group(0)
+
+    # Scanned-image detection heuristic (PDF only) — multi-page sampling on READ pages only
+    result["is_scanned"] = _detect_scanned_pdf(read_page_texts, result["pages"])
 
     return result
 
@@ -419,7 +434,13 @@ def extract_docx(docx_path: str) -> dict:
         result["author_from_meta"] = core_props.author or ""
         result["title_from_meta"] = core_props.title or ""
 
-        paragraphs = doc.paragraphs[:30]
+        paragraphs = []
+        char_count = 0
+        for p in doc.paragraphs:
+            paragraphs.append(p)
+            char_count += len(p.text)
+            if char_count >= 5000:
+                break
         full_text = "\n".join(p.text for p in paragraphs)
         result["text_chars"] = len(full_text)
         result["word_count"] = _smart_word_count(full_text)
@@ -703,6 +724,7 @@ def main():
     # Parse optional flags
     max_pages = 0
     citation_style = "gb7714"
+    output_dir: Path | None = None
     i = 0
     while i < len(args):
         if args[i] in ("--max-pages", "-m") and i + 1 < len(args):
@@ -716,6 +738,9 @@ def main():
         elif args[i] in ("--citation-style", "-c") and i + 1 < len(args):
             citation_style = args[i + 1].lower()
             i += 2
+        elif args[i] in ("--output-dir", "-o") and i + 1 < len(args):
+            output_dir = Path(args[i + 1]).expanduser()
+            i += 2
         else:
             i += 1
 
@@ -723,7 +748,7 @@ def main():
     pos_args = [a for a in args if not a.startswith("-")]
     if not pos_args:
         print("用法：python extract_literature_metadata.py <文献文件夹路径>")
-        print("  [--max-pages N] [--citation-style gb7714|apa|mla|numbered]")
+        print("  [--max-pages N] [--citation-style gb7714|apa|mla|numbered] [--output-dir PATH]")
         print("未提供路径，进入交互模式...")
         lit_dir = _prompt_path()
     else:
@@ -750,8 +775,13 @@ def main():
     if skipped:
         print(f"跳过 {len(skipped)} 个不支持的文件")
 
+    # Determine output directory
+    if output_dir is None:
+        output_dir = lit_dir / ".els_output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # Load cache for incremental extraction
-    cache_path = lit_dir / "_literature_cache.json"
+    cache_path = output_dir / "_literature_cache.json"
     cache = _load_cache(cache_path)
     results: list[dict] = []
     to_extract: list[Path] = []
@@ -830,13 +860,13 @@ def main():
         "duplicates": duplicates,
         "results": results,
     }
-    output_path = lit_dir / "_literature_extraction.json"
+    output_path = output_dir / "_literature_extraction.json"
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output_payload, f, ensure_ascii=False, indent=2)
     print(f"\nJSON 结果已保存：{output_path}")
 
     # Markdown report output
-    md_path = lit_dir / "_literature_report.md"
+    md_path = output_dir / "_literature_report.md"
     md_content = generate_markdown_report(results, lit_dir, skipped, duplicates, citation_style)
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_content)

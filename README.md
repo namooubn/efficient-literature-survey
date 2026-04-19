@@ -136,6 +136,7 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 支持命令行参数：
 - `--max-pages N` / `-m N`：强制只读前 N 页（覆盖智能分页策略）
 - `--citation-style gb7714|apa|mla|numbered` / `-c STYLE`：选择引用格式（默认 gb7714）
+- `--output-dir PATH` / `-o PATH`：指定输出目录（默认在文献文件夹内创建 `.els_output/` 子目录）
 
 支持交互式使用：
 - 不带参数 → 提示输入路径
@@ -150,9 +151,7 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 
 **方式二：Claude Code Skill 自动触发**
 
-**直接触发（推荐）：** 在输入框输入 `/efficient-literature-survey` 回车即可。
-
-**自然语言触发：** 说出以下关键词亦可激活：
+说出以下关键词即可激活：
 - "帮我读文献写绪论和综述"
 - "快速理解大量文献"
 - "节省 token 读论文"
@@ -174,7 +173,6 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 efficient-literature-survey/
 ├── SKILL.md                              # Claude 读取的核心 skill 文档（仅 Claude Code 有效）
 ├── extract_literature_metadata.py        # 独立批量提取脚本（任何 Python 环境可用）
-├── extract_pdf_metadata.py             # 旧版 PDF-only 脚本（保留向后兼容）
 ├── test_extract_literature_metadata.py # 单元测试（52 个用例）
 ├── CHANGELOG.md                        # 版本变更日志
 ├── README.md                           # 中文版本（本文件）
