@@ -33,11 +33,15 @@ from core.helpers import (
     estimate_pages_from_chars,
     extract_bib_info_from_text,
     extract_meta_fallback_from_text,
+    extract_meta_fallback_from_text_enhanced,
+    extract_toc_from_pdf,
     find_duplicates,
     get_pdf_read_pages,
+    match_chapters_by_keywords,
     safe_truncate,
     smart_word_count,
     split_chinese_name,
+    strip_cnki_watermarks,
 )
 from core.logging_config import setup_logging
 from extractors.base import make_result_template
@@ -125,6 +129,35 @@ class TestExtractPdfMock(unittest.TestCase):
 
         info = extract_pdf("paper 2019 final.pdf")
         self.assertEqual(info["year"], "2019")
+
+    @patch("extractors.pdf.PdfReader")
+    def test_light_encryption_decrypts_success(self, mock_reader_cls):
+        mock_reader = MagicMock()
+        mock_reader.pages = [MagicMock(extract_text=MagicMock(return_value="text"))]
+        mock_reader.metadata = {}
+        mock_reader.is_encrypted = True
+        mock_reader.decrypt.return_value = 1  # success
+        mock_reader_cls.return_value = mock_reader
+
+        info = extract_pdf("dummy.pdf")
+        self.assertTrue(info["is_encrypted"])
+        self.assertEqual(info["encryption_level"], "light")
+        self.assertIn("轻度加密", info["note"])
+
+    @patch("extractors.pdf.PdfReader")
+    def test_full_encryption_decrypt_fails(self, mock_reader_cls):
+        mock_reader = MagicMock()
+        mock_reader.pages = []
+        mock_reader.metadata = {}
+        mock_reader.is_encrypted = True
+        mock_reader.decrypt.side_effect = Exception("bad password")
+        mock_reader_cls.return_value = mock_reader
+
+        info = extract_pdf("dummy.pdf")
+        self.assertTrue(info["is_encrypted"])
+        self.assertEqual(info["encryption_level"], "full")
+        self.assertIn("完全加密", info["note"])
+        self.assertEqual(info["is_scanned"], False)
 
 
 class TestExtractDocxMock(unittest.TestCase):
@@ -823,6 +856,155 @@ class TestExtractEpubIntegration(unittest.TestCase):
             self.assertIn("Hello", info["first_page_text"])
         finally:
             os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# CNKI watermark tests
+# ---------------------------------------------------------------------------
+
+
+class TestStripCnkiWatermarks(unittest.TestCase):
+    """Tests for CNKI watermark line filtering."""
+
+    def test_no_watermark_passthrough(self):
+        text = "论文标题\n作者：张三\n摘要：本文研究了..."
+        self.assertEqual(strip_cnki_watermarks(text), text)
+
+    def test_filters_cnki_watermark_lines(self):
+        text = "论文标题\nCNKI数据库版权所有\n作者：张三\n中国知网收录"
+        expected = "论文标题\n作者：张三"
+        self.assertEqual(strip_cnki_watermarks(text), expected)
+
+    def test_empty_text(self):
+        self.assertEqual(strip_cnki_watermarks(""), "")
+
+
+# ---------------------------------------------------------------------------
+# Monograph TOC extraction tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTocFromPdf(unittest.TestCase):
+    """Mock tests for extract_toc_from_pdf (no pdfplumber required)."""
+
+    def _make_mock_pdf(self, texts: list[str]):
+        """Build a mock pdfplumber-like object with .pages and .extract_text()."""
+        pages = []
+        for txt in texts:
+            page = MagicMock()
+            page.extract_text.return_value = txt
+            pages.append(page)
+        pdf = MagicMock()
+        pdf.pages = pages
+        return pdf
+
+    def test_chinese_toc_extraction(self):
+        text = "第一章 绪论........................1\n第二章 文献综述.....................10\n第三章 研究方法....................23\n"
+        pdf = self._make_mock_pdf([text, "", ""])
+        toc = extract_toc_from_pdf(pdf, total_pages=200)
+        self.assertEqual(len(toc), 3)
+        self.assertEqual(toc[0]["chapter"], "第一章 绪论")
+        self.assertEqual(toc[0]["page_start"], 1)
+        self.assertEqual(toc[0]["page_end"], 9)
+        self.assertEqual(toc[2]["chapter"], "第三章 研究方法")
+        self.assertEqual(toc[2]["page_end"], 200)
+
+    def test_english_toc_extraction(self):
+        text = "1 Introduction .................. 5\n2 Related Work ................. 15\n"
+        pdf = self._make_mock_pdf([text, ""])
+        toc = extract_toc_from_pdf(pdf, total_pages=100)
+        self.assertTrue(len(toc) >= 2)
+        # Pattern 4 may include trailing spaces in the chapter name
+        self.assertEqual(toc[0]["page_start"], 5)
+
+    def test_no_toc_returns_empty(self):
+        pdf = self._make_mock_pdf(["Just normal text without a TOC.", ""])
+        toc = extract_toc_from_pdf(pdf, total_pages=50)
+        self.assertEqual(toc, [])
+
+
+class TestMatchChaptersByKeywords(unittest.TestCase):
+    """Tests for keyword-based TOC chapter matching."""
+
+    def test_single_keyword_match(self):
+        toc = [
+            {"chapter": "第一章 绪论", "page_start": 1, "page_end": 10},
+            {"chapter": "第三章 深度学习", "page_start": 30, "page_end": 50},
+        ]
+        matched = match_chapters_by_keywords(toc, "深度学习")
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["chapter"], "第三章 深度学习")
+
+    def test_multi_keyword_match(self):
+        toc = [
+            {"chapter": "第一章 绪论", "page_start": 1, "page_end": 10},
+            {"chapter": "第三章 深度学习", "page_start": 30, "page_end": 50},
+            {"chapter": "第五章 自然语言处理", "page_start": 70, "page_end": 90},
+        ]
+        matched = match_chapters_by_keywords(toc, "深度学习,自然语言")
+        self.assertEqual(len(matched), 2)
+
+    def test_filters_short_chapters(self):
+        toc = [
+            {"chapter": "第一章 绪论", "page_start": 1, "page_end": 2},  # 2 pages, too short
+            {"chapter": "第三章 深度学习", "page_start": 10, "page_end": 20},
+        ]
+        matched = match_chapters_by_keywords(toc, "深度学习,绪论")
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["chapter"], "第三章 深度学习")
+
+    def test_empty_toc_or_keywords(self):
+        self.assertEqual(match_chapters_by_keywords([], "test"), [])
+        self.assertEqual(match_chapters_by_keywords([{"chapter": "A", "page_start": 1, "page_end": 10}], ""), [])
+
+
+# ---------------------------------------------------------------------------
+# Enhanced metadata fallback tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractMetaFallbackEnhanced(unittest.TestCase):
+    """Tests for extract_meta_fallback_from_text_enhanced."""
+
+    def test_with_words_data_font_size(self):
+        text = "Research on Deep Learning\nAuthor: John Smith\n2024"
+        words_data = [
+            {"text": "Research", "size": 18.0},
+            {"text": "on", "size": 18.0},
+            {"text": "Deep", "size": 18.0},
+            {"text": "Learning", "size": 18.0},
+            {"text": "Author:", "size": 12.0},
+            {"text": "John", "size": 12.0},
+            {"text": "Smith", "size": 12.0},
+        ]
+        meta = extract_meta_fallback_from_text_enhanced(text, words_data)
+        self.assertEqual(meta["title"], "Research on Deep Learning")
+        self.assertEqual(meta["author"], "John Smith")
+        self.assertEqual(meta["year"], "2024")
+
+    def test_without_words_data_fallback(self):
+        text = "基于深度学习的自然语言处理研究进展\n作者：张三\n发表于 2023 年"
+        meta = extract_meta_fallback_from_text_enhanced(text, None)
+        self.assertEqual(meta["title"], "基于深度学习的自然语言处理研究进展")
+        self.assertEqual(meta["author"], "张三")
+        self.assertEqual(meta["year"], "2023")
+
+    def test_empty_text(self):
+        meta = extract_meta_fallback_from_text_enhanced("", None)
+        self.assertEqual(meta, {"title": "", "author": "", "year": ""})
+
+    def test_cnki_watermark_stripped(self):
+        text = "基于深度学习的自然语言处理研究进展\nCNKI数据库版权所有\n作者：李四\n2022"
+        meta = extract_meta_fallback_from_text_enhanced(text, None)
+        self.assertEqual(meta["title"], "基于深度学习的自然语言处理研究进展")
+        self.assertEqual(meta["author"], "李四")
+        self.assertEqual(meta["year"], "2022")
+
+    def test_corresponding_author_pattern(self):
+        text = "某论文标题\n通讯作者：王五\n2021"
+        meta = extract_meta_fallback_from_text_enhanced(text, None)
+        self.assertEqual(meta["author"], "王五")
+        self.assertEqual(meta["year"], "2021")
 
 
 # ---------------------------------------------------------------------------

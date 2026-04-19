@@ -53,12 +53,12 @@ from report.generator import generate_markdown_report
 # ---------------------------------------------------------------------------
 
 
-def extract_info(file_path: str, max_pages: int = 0) -> dict:
+def extract_info(file_path: str, max_pages: int = 0, keywords: str = "") -> dict:
     """Dispatch to the correct extractor based on file extension."""
     ext = Path(file_path).suffix.lower()
 
     if ext == ".pdf":
-        return extract_pdf(file_path, max_pages=max_pages)
+        return extract_pdf(file_path, max_pages=max_pages, keywords=keywords)
     if ext == ".docx":
         return extract_docx(file_path)
     if ext in (".txt", ".md"):
@@ -151,11 +151,16 @@ def run_env_check(lit_dir: Path | None = None) -> bool:
     # 2. Encoding check (Windows GBK trap)
     import locale
     encoding = locale.getpreferredencoding(False)
+    stdout_enc = getattr(sys.stdout, "encoding", "")
+    py_env_enc = os.environ.get("PYTHONIOENCODING", "")
     print(f"\n  系统默认编码: {encoding}")
     if encoding.lower() in ("gbk", "gb2312", "cp936"):
-        print("  [WARN] Windows 默认编码为 GBK，中文输出可能出现乱码")
-        print("  建议执行: chcp 65001  或  set PYTHONIOENCODING=utf-8")
-        # Not fatal; just warn
+        # If UTF-8 is already forced, downgrade to INFO
+        if (stdout_enc and stdout_enc.lower() == "utf-8") or py_env_enc.lower() == "utf-8":
+            print("  [INFO] Windows 默认编码为 GBK，但脚本已强制 UTF-8 输出")
+        else:
+            print("  [WARN] Windows 默认编码为 GBK，中文输出可能出现乱码")
+            print("  建议执行: chcp 65001  或  set PYTHONIOENCODING=utf-8")
 
     # 3. File preview (if folder provided)
     if lit_dir and lit_dir.exists():
@@ -168,22 +173,33 @@ def run_env_check(lit_dir: Path | None = None) -> bool:
                 try:
                     r = PdfReader(str(p))
                     if getattr(r, "is_encrypted", False):
-                        flag = " [加密]"
+                        try:
+                            r.decrypt("")
+                            flag = " [轻度加密]"
+                        except Exception:
+                            flag = " [完全加密]"
                     elif len(pdf_files) < 10 or not r.pages[0].extract_text():
                         flag = " [可能为扫描件/图片PDF]"
                 except Exception as e:
                     flag = f" [读取失败: {type(e).__name__}]"
                 print(f"    - {p.name}{flag}")
-            encrypted = 0
+            light_encrypted = 0
+            full_encrypted = 0
             for p in pdf_files:
                 try:
                     r = PdfReader(str(p))
                     if getattr(r, "is_encrypted", False):
-                        encrypted += 1
+                        try:
+                            r.decrypt("")
+                            light_encrypted += 1
+                        except Exception:
+                            full_encrypted += 1
                 except Exception:
                     pass
-            if encrypted:
-                print(f"\n  [WARN] 检测到 {encrypted} 个加密 PDF，需手动解密")
+            if light_encrypted:
+                print(f"\n  [INFO] 检测到 {light_encrypted} 个轻度加密 PDF，可自动提取")
+            if full_encrypted:
+                print(f"\n  [WARN] 检测到 {full_encrypted} 个完全加密 PDF，需手动解密")
     else:
         print("\n  未提供文献文件夹路径，跳过文件预览")
 
@@ -237,6 +253,10 @@ def main():
     parser.add_argument(
         "--env-check", "-e", action="store_true",
         help="Run environment pre-check only (no extraction)",
+    )
+    parser.add_argument(
+        "--keywords", "-k", default="",
+        help="Comma-separated keywords for monograph chapter matching (e.g. 'Agenda-Setting,Memes')",
     )
 
     args = parser.parse_args()
@@ -327,7 +347,7 @@ def main():
         logging.info("使用 %d 线程并发处理...", max_workers)
 
         def _extract_with_log(path: str) -> dict:
-            info = extract_info(path, max_pages=args.max_pages)
+            info = extract_info(path, max_pages=args.max_pages, keywords=args.keywords)
             rel = Path(path).relative_to(lit_dir)
             info["relative_path"] = str(rel)
             info["filename"] = rel.name

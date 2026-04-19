@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-04-20
+
+### Added
+
+- **Monograph TOC extraction**: For PDFs >100 pages, scans the first 20 pages for a table of contents, extracts chapter structure (title, page_start, page_end), and matches relevant chapters against user-provided `--keywords`. McCombs 204-page monograph now extracts only the relevant chapter (e.g., Chapter 3, pp.23-45) instead of front-matter bias.
+- **Encrypted PDF tiered handling**: Replaced binary encrypted/unencrypted with two tiers. "Light" encryption (PyPDF2 `is_encrypted=True` but empty-password decrypt succeeds) — pdfplumber can still read content; marked as `encryption_level: "light"` and proceeds with extraction. "Full" encryption (decrypt fails) — marked as `encryption_level: "full"` and skipped with a note. Previously, all encrypted PDFs were treated as unreadable.
+- **Chinese layout-aware metadata fallback**: `extract_meta_fallback_from_text_enhanced()` uses pdfplumber font-size analysis to identify the title line (largest font in first-page words), and CNKI watermark filtering (`strip_cnki_watermarks()`) removes repeated header noise. Author regex now also matches correspondence authors (`通讯作者`).
+- **Windows GBK encoding warning downgrade**: `run_env_check()` now inspects `sys.stdout.encoding` and `PYTHONIOENCODING`. If UTF-8 is already enforced, outputs `[INFO] Encoding OK` instead of `[WARN] GBK detected`, reducing user anxiety on correctly-configured terminals.
+- **Semi-Fast Mode (Mode D)**: SKILL.md now supports a new fast-path where all 5 Stage-0 configs are provided **and** the user does not request per-stage confirmation. Stage 1, 2, and 3 checkpoints are still emitted, but Claude auto-advances without asking "Ready to proceed?" each time. Faster than Mode B/C for power users who trust the defaults.
+
+### Changed
+
+- **pdfplumber strategy**: Previously pdfplumber was an optional fallback (only opened when PyPDF2 extracted <500 characters). Now pdfplumber is always opened when available to perform: (a) layout/font analysis for title detection, (b) TOC extraction for monographs, and (c) light-encryption readability verification. This makes pdfplumber a functional prerequisite for the new v1.3.0 features, though the script still degrades gracefully without it.
+
+### Fixed
+
+- Encrypted PDF false positives: CNKI-downloaded PDFs that are "lightly encrypted" (PyPDF2 reports encrypted but open fine) were previously treated as fully encrypted and skipped. They are now extracted normally.
+- GBK false positives: Windows terminals with `PYTHONIOENCODING=utf-8` set were still warned about GBK encoding. Now correctly recognized as safe.
+- Chinese metadata incompleteness: PDFs from CNKI often had empty `/Title` metadata and "CNKI" as the extracted title. The enhanced fallback now filters CNKI watermarks and uses font-size heuristics to recover the real title.
+
 ## [1.2.0] - 2026-04-19
 
 ### Added
@@ -26,6 +46,7 @@ All notable changes to this project will be documented in this file.
 - **Metadata fallback heuristics (`extract_meta_fallback_from_text`)**: When PDF `/Title` or `/Author` metadata is empty, the system now falls back to extracting title, author, and year from the first-page text using heuristic rules (title-length windowing, author-marker regexes, year extraction). Reduces "incomplete metadata" false positives significantly.
 - **Workflow checkpoint persistence (`checkpoint/manager.py`)**: After Stage 1 finishes, `_els_stage.json` is written to the output directory containing stage number, literature folder path, result count, and optional Stage 0 config. Enables Claude to resume multi-turn sessions without re-running extraction.
 - **Test coverage expanded**: Added `TestExtractMetaFallbackFromText` (6 cases) and `TestCheckpointManager` (4 cases). Total test count: 92+ → 103.
+- **Test coverage expanded (v1.3.0)**: Added `TestStripCnkiWatermarks` (3 cases), `TestExtractTocFromPdf` (3 cases), `TestMatchChaptersByKeywords` (4 cases), `TestExtractMetaFallbackEnhanced` (5 cases), and encryption-tier mock tests (2 cases). Total test count: 103 → 120.
 - **Environment pre-check (`--env-check`)**: New CLI flag runs dependency validation, terminal encoding detection (Windows GBK trap), encrypted PDF preview, and scanned-PDF preview before extraction begins.
 - **Encrypted PDF detection**: `extractors/pdf.py` now detects `is_encrypted` via PyPDF2; attempts empty-password decrypt; surfaces encryption status in JSON/Markdown output.
 - **Windows encoding robustness**: `extract_literature_metadata.py` now forces UTF-8 on `sys.stdout`/`sys.stderr` via `TextIOWrapper` to prevent mojibake on GBK terminals.

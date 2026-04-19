@@ -108,6 +108,10 @@ pip install -r requirements.txt
 | **结构化异常记录** | 提取失败时记录错误类型到报告备注栏 | 不再静默失败 |
 | **扫描件 OCR 指引** | 检测到扫描 PDF 时，报告内附 marker/nougat/tesseract 安装命令 | 用户知道下一步该做什么 |
 | **元数据 fallback** | PDF `/Title`、`/Author` 为空时，自动从首行文本启发式提取标题/作者/年份 | 大幅降低"文献信息不完整"误报 |
+| **专著目录提取** | 对 >100 页 PDF 自动扫描目录结构，按 `--keywords` 匹配相关章节 | McCombs 204页 → 仅精读第 3 章（p.23-45） |
+| **加密 PDF 分级** | 区分轻度加密（pdfplumber 可读）和完全加密（需手动解密） | 知网轻度加密 PDF 不再阻断流程 |
+| **中文布局感知元数据** | pdfplumber 字体分析 + CNKI 水印过滤，提升中文论文标题/作者提取准确率 | 大幅降低"文献信息不完整"误报 |
+| **Windows GBK 编码降级** | 检测到 UTF-8 已强制时，GBK 警告降为 INFO 级别 | 减少不必要的用户焦虑 |
 | **工作流 checkpoint** | Stage 1 完成后写入 `_els_stage.json`，Claude 可在多轮对话中断后恢复状态 | 支持长时间任务断点续作 |
 
 ### 真实数据闭环
@@ -148,6 +152,7 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 - `--max-pages N` / `-m N`：强制只读前 N 页（覆盖智能分页策略）
 - `--citation-style gb7714|apa|mla|numbered` / `-c STYLE`：选择引用格式（默认 gb7714）
 - `--output-dir PATH` / `-o PATH`：指定输出目录（默认在文献文件夹内创建 `.els_output/` 子目录）
+- `--keywords "kw1,kw2"` / `-k "kw1,kw2"`：专著章节匹配关键词（用于 >100 页 PDF 的目录匹配）
 - `--bibtex` / `-b`：额外输出 BibTeX 文件 `_literature_references.bib`
 - `--verbose` / `-v`：DEBUG 级别日志输出
 - `--quiet` / `-q`：只输出 WARNING 及以上级别日志
@@ -159,8 +164,8 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 - 无支持文件 → 列出检测到哪些、为什么不支持
 
 输出：
-- `_literature_extraction.json` — 结构化数据（含 `duplicates`、`citation_style`、`results[].citation`）
-- `_literature_report.md` — 人可读汇总报告（含重复检测、OCR 指引、按子文件夹分组、参考文献列表附录）
+- `_literature_extraction.json` — 结构化数据（含 `duplicates`、`citation_style`、`results[].citation`、`results[].toc`、`results[].matched_chapters`、`results[].encryption_level`）
+- `_literature_report.md` — 人可读汇总报告（含重复检测、加密分级、专著章节匹配、OCR 指引、按子文件夹分组、参考文献列表附录）
 - `_literature_references.bib` — BibTeX 文件（当使用 `--bibtex` 时）
 
 ... 支持 PDF / DOCX / TXT / MD / EPUB 多格式混合文件夹，含子文件夹递归
@@ -189,7 +194,7 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 efficient-literature-survey/
 ├── SKILL.md                              # Claude 读取的核心 skill 文档（仅 Claude Code 有效）
 ├── extract_literature_metadata.py        # CLI 入口（向后兼容，任何 Python 环境可用）
-├── test_extract_literature_metadata.py   # 单元测试（92+ 个用例）
+├── test_extract_literature_metadata.py   # 单元测试（120 个用例）
 ├── CHANGELOG.md                          # 版本变更日志
 ├── README.md                             # 中文版本（本文件）
 ├── README_EN.md                          # English version
@@ -244,6 +249,9 @@ python -m unittest test_extract_literature_metadata.py -v
 - 缓存管理器 roundtrip 测试
 - 提取器 dispatcher 路由测试
 - 引用格式、BibTeX 生成、重复检测等集成测试
+- CNKI 水印过滤、目录提取、章节关键词匹配
+- 加密分级处理（轻度/完全）
+- 基于字体大小的增强元数据 fallback
 
 ---
 

@@ -104,6 +104,10 @@ pip install -r requirements.txt
 | **Structured error logging** | Extraction failures are recorded in report notes | No more silent failures |
 | **Scanned PDF guidance** | Report includes specific OCR tool recommendations (marker, nougat, tesseract) with install commands | Users know exactly what to do next |
 | **Metadata fallback** | When PDF `/Title` or `/Author` is empty, heuristically extracts title/author/year from first-page text | Reduces "incomplete metadata" false positives |
+| **Monograph TOC extraction** | For PDFs >100 pages, scans TOC structure and matches chapters against `--keywords` | McCombs 204 pages → read only Chapter 3 (pp.23-45) |
+| **Encrypted PDF tiered handling** | Distinguishes light encryption (pdfplumber readable) from full encryption (manual decrypt required) | Light-encrypted CNKI PDFs no longer block the pipeline |
+| **Chinese layout-aware metadata** | pdfplumber font-size analysis + CNKI watermark filtering improves Chinese title/author extraction | Reduces "incomplete metadata" false positives for Chinese papers |
+| **Windows GBK warning downgrade** | When UTF-8 is already enforced, GBK warning is downgraded to INFO level | Reduces unnecessary user anxiety |
 | **Workflow checkpoint** | Writes `_els_stage.json` after Stage 1 so Claude can resume across multi-turn sessions | Supports long-running tasks with interruption recovery |
 
 ### Real-World Results
@@ -140,6 +144,7 @@ CLI flags:
 - `--max-pages N` / `-m N`: Force read only the first N pages (overrides smart paging)
 - `--citation-style gb7714|apa|mla|numbered` / `-c STYLE`: Choose citation format (default: gb7714)
 - `--output-dir PATH` / `-o PATH`: Specify output directory (default: `.els_output/` subfolder inside the literature folder)
+- `--keywords "kw1,kw2"` / `-k "kw1,kw2"`: Keywords for monograph chapter matching (used for PDFs >100 pages with TOC extraction)
 - `--bibtex` / `-b`: Also output a BibTeX file `_literature_references.bib`
 - `--verbose` / `-v`: DEBUG-level logging
 - `--quiet` / `-q`: Only WARNING and above
@@ -151,8 +156,8 @@ Interactive CLI features:
 - No supported files found → lists what was detected and why they were skipped
 
 Outputs:
-- `_literature_extraction.json` — structured data (includes `duplicates`, `citation_style`, `results[].citation`)
-- `_literature_report.md` — human-readable summary report (includes duplicate detection, OCR guidance, subfolder grouping, citation appendix)
+- `_literature_extraction.json` — structured data (includes `duplicates`, `citation_style`, `results[].citation`, `results[].toc`, `results[].matched_chapters`, `results[].encryption_level`)
+- `_literature_report.md` — human-readable summary report (includes duplicate detection, encryption tiers, monograph chapter matching, OCR guidance, subfolder grouping, citation appendix)
 - `_literature_references.bib` — BibTeX file (when `--bibtex` is used)
 
 ... Supports mixed folders of PDF / DOCX / TXT / MD / EPUB, including recursive subfolders
@@ -181,7 +186,7 @@ If you don't use Claude Code, you can still use the **Python script standalone**
 efficient-literature-survey/
 ├── SKILL.md                              # Core skill document for Claude (Claude Code only)
 ├── extract_literature_metadata.py        # CLI entry point (backward-compatible, any Python env)
-├── test_extract_literature_metadata.py   # Unit tests (92+ test cases)
+├── test_extract_literature_metadata.py   # Unit tests (120 test cases)
 ├── CHANGELOG.md                          # Version changelog
 ├── README.md                             # Chinese version
 ├── README_EN.md                          # English version (this file)
@@ -236,6 +241,9 @@ Current test coverage includes:
 - Cache manager roundtrip tests
 - Extractor dispatcher routing tests
 - Integration tests for citation formats, BibTeX generation, and duplicate detection
+- CNKI watermark filtering, TOC extraction, chapter keyword matching
+- Encryption-tier handling (light vs full)
+- Enhanced metadata fallback with font-size heuristics
 
 ---
 

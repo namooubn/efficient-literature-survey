@@ -25,5 +25,9 @@ def make_result_template(file_path: str) -> dict:
         "page_range": "",
         "doi": "",
         "is_encrypted": False,
+        "encryption_level": "none",
         "note": "",
+        "toc": [],
+        "matched_chapters": [],
+        "title_confidence": "low",
     }

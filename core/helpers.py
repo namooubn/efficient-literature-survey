@@ -11,6 +11,7 @@ from .constants import _COMPOUND_SURNAMES
 from .config import (
     BIB_TEXT_SCAN_LINES,
     CHARS_PER_PAGE,
+    CNKI_WATERMARK_KEYWORDS,
     DOCX_SAMPLE_CHARS,
     DOCX_TABLE_SAMPLE_COUNT,
     EPUB_BIB_SAMPLE_CHARS,
@@ -20,7 +21,12 @@ from .config import (
     META_TITLE_CANDIDATE_LINES,
     META_TITLE_MAX_LEN,
     META_TITLE_MIN_LEN,
+    MONOGRAPH_KEYWORD_MATCH_MIN_PAGES,
+    MONOGRAPH_MIN_PAGES,
+    MONOGRAPH_TOC_SCAN_PAGES,
     PDF_FALLBACK_TEXT_CHARS,
+    PDFPLUMBER_FONT_DIFF_THRESHOLD,
+    PDFPLUMBER_MIN_FONT_FOR_TITLE,
     SCANNED_DENSITY_THRESHOLD,
     SCANNED_EMPTY_RATIO,
     SCANNED_MIN_CHARS_PAGE,
@@ -91,14 +97,25 @@ def extract_meta_fallback_from_text(text: str) -> dict:
 
     # Author heuristic: look for explicit markers
     author_patterns = [
-        r"(?:作者|Author|Authors)[:：\s]+(.{2,80})",
-        r"(?:著者|Writer|by)[:：\s]+(.{2,80})",
+        r"(?:作者|Author|Authors)[:： \t]+([^\n]{2,80})",
+        r"(?:著者|Writer|by)[:： \t]+([^\n]{2,80})",
     ]
     for pat in author_patterns:
         m = re.search(pat, text, re.IGNORECASE)
         if m:
             result["author"] = m.group(1).strip()
             break
+
+    # Filter known garbage author values from fallback extraction
+    if result["author"].lower() in (
+        "how to cite this article",
+        "cnki",
+        "cnki数据库",
+        "知网",
+        "author",
+        "authors",
+    ):
+        result["author"] = ""
 
     # Year heuristic: try to extract a 4-digit year from text
     year_match = re.search(r"\b(19|20)\d{2}\b", text)
@@ -323,3 +340,221 @@ def file_sha256(file_path: str) -> str:
     except Exception:
         return ""
     return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# CNKI watermark filtering
+# ---------------------------------------------------------------------------
+
+
+def strip_cnki_watermarks(text: str) -> str:
+    """Remove lines containing CNKI watermark keywords."""
+    if not text:
+        return text
+    lines = text.splitlines()
+    filtered = []
+    for ln in lines:
+        if any(kw in ln for kw in CNKI_WATERMARK_KEYWORDS):
+            continue
+        filtered.append(ln)
+    return "\n".join(filtered)
+
+
+# ---------------------------------------------------------------------------
+# Monograph TOC extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_toc_from_pdf(pdf, total_pages: int) -> list[dict]:
+    """
+    Scan the first MONOGRAPH_TOC_SCAN_PAGES of a pdfplumber PDF for a
+    table of contents.  Returns a list of dicts:
+        [{"chapter": str, "page_start": int, "page_end": int}, ...]
+    """
+    toc: list[dict] = []
+    scan_limit = min(MONOGRAPH_TOC_SCAN_PAGES, total_pages)
+
+    # Try multiple TOC patterns
+    toc_patterns = [
+        # English: "Chapter 1  Introduction .................. 23"
+        r"(?:Chapter|Ch\.?|Part|Section)\s*[\dIVX]+[\s.]+(.+?)[\s.]+(\d+)",
+        # Chinese: "第一章 绪论........................23" or "第1章 绪论 .... 23"
+        r"第[\s]*([一二三四五六七八九十\d]+)[\s]*章[\s]+(.+?)[\s.]+(\d+)",
+        # Chinese alt: "一、绪论 .... 23"
+        r"([一二三四五六七八九十][、\.\s]+.+?)[\s.]+(\d+)",
+        # Simple: "Introduction .................... 23"
+        r"([A-Za-z\u4e00-\u9fff][A-Za-z\s\u4e00-\u9fff]+)[\s.]+(\d+)",
+    ]
+
+    for page_idx in range(scan_limit):
+        try:
+            page = pdf.pages[page_idx]
+            text = page.extract_text() or ""
+            if not text:
+                continue
+            for pat in toc_patterns:
+                for m in re.finditer(pat, text):
+                    groups = m.groups()
+                    if len(groups) >= 2:
+                        if len(groups) == 3 and re.match(r"[一二三四五六七八九十\d]+$", groups[0]):
+                            # Chinese chapter pattern: groups = (num, title, page)
+                            chapter = f"第{groups[0]}章 {groups[1].strip()}"
+                            page_num = int(groups[2])
+                        else:
+                            chapter = groups[0].strip()
+                            page_num = int(groups[-1])
+                        if chapter and page_num > 0:
+                            toc.append({"chapter": chapter, "page_start": page_num, "page_end": 0})
+        except Exception:
+            continue
+
+    # Filter noise: skip very short or very long chapter names
+    MIN_CHAPTER_LEN = 3
+    MAX_CHAPTER_LEN = 120
+    toc = [
+        e for e in toc
+        if MIN_CHAPTER_LEN <= len(e["chapter"].strip()) <= MAX_CHAPTER_LEN
+    ]
+
+    # Deduplicate by chapter name and sort by page_start
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for entry in toc:
+        key = entry["chapter"]
+        if key not in seen:
+            seen.add(key)
+            deduped.append(entry)
+    deduped.sort(key=lambda x: x["page_start"])
+
+    # Fill in page_end from next entry
+    for i in range(len(deduped)):
+        if i + 1 < len(deduped):
+            deduped[i]["page_end"] = deduped[i + 1]["page_start"] - 1
+        else:
+            deduped[i]["page_end"] = total_pages
+
+    return deduped
+
+
+def match_chapters_by_keywords(toc: list[dict], keywords: str) -> list[dict]:
+    """
+    Match TOC chapters against comma-separated keywords.
+    Returns chapters where any keyword is found in the chapter title.
+    Only includes chapters with page_span >= MONOGRAPH_KEYWORD_MATCH_MIN_PAGES.
+    """
+    if not toc or not keywords:
+        return []
+
+    # Normalize keywords: treat hyphen as space for flexible matching
+    kw_list = [
+        k.strip().lower().replace("-", " ")
+        for k in keywords.split(",") if k.strip()
+    ]
+    matched: list[dict] = []
+    for entry in toc:
+        chapter_lower = entry["chapter"].lower().replace("-", " ")
+        for kw in kw_list:
+            if kw in chapter_lower:
+                page_span = entry["page_end"] - entry["page_start"] + 1
+                if page_span >= MONOGRAPH_KEYWORD_MATCH_MIN_PAGES:
+                    matched.append(entry)
+                break
+    return matched
+
+
+# ---------------------------------------------------------------------------
+# Enhanced metadata fallback with layout awareness
+# ---------------------------------------------------------------------------
+
+
+def extract_meta_fallback_from_text_enhanced(
+    text: str, words_data: list | None = None
+) -> dict:
+    """
+    Enhanced fallback that optionally uses pdfplumber word-level data
+    (with font sizes) to better identify title and author blocks.
+
+    words_data: list of dicts from pdfplumber page.extract_words()
+        each with keys: text, top, fontname, size (if available)
+    """
+    result = {"title": "", "author": "", "year": ""}
+    if not text:
+        return result
+
+    # Strip CNKI watermarks first
+    text = strip_cnki_watermarks(text)
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return result
+
+    # --- Title extraction ---
+    # If we have words_data with font sizes, use font-size heuristic
+    if words_data:
+        try:
+            sizes = [
+                float(w.get("size", 0)) for w in words_data if w.get("size")
+            ]
+            if sizes:
+                max_size = max(sizes)
+                if max_size >= PDFPLUMBER_MIN_FONT_FOR_TITLE:
+                    # Collect words with font size close to max
+                    title_words = [
+                        w["text"] for w in words_data
+                        if w.get("size")
+                        and max_size - float(w["size"]) <= PDFPLUMBER_FONT_DIFF_THRESHOLD
+                    ]
+                    candidate = " ".join(title_words).strip()
+                    if (
+                        META_TITLE_MIN_LEN <= len(candidate.replace(" ", ""))
+                        <= META_TITLE_MAX_LEN
+                    ):
+                        result["title"] = candidate
+        except Exception:
+            pass
+
+    # Fallback to line-based heuristic if no title from layout
+    if not result["title"]:
+        candidates = []
+        for ln in lines[:META_TITLE_CANDIDATE_LINES]:
+            ln_stripped = ln.replace(" ", "").replace("\t", "")
+            if (
+                META_TITLE_MIN_LEN <= len(ln_stripped) <= META_TITLE_MAX_LEN
+                and not ln_stripped.isdigit()
+            ):
+                candidates.append(ln)
+        if candidates:
+            result["title"] = max(candidates, key=len)
+
+    # --- Author extraction ---
+    author_patterns = [
+        r"(?<![a-zA-Z])(?:作者|Author|Authors)\b[:： \t]+([^\n]{2,80})",
+        r"(?<![a-zA-Z])(?:著者|Writer|by)\b[:： \t]+([^\n]{2,80})",
+        r"(?:通讯作者|Corresponding author)[:： \t]*([^\n]{2,80})",
+        r"(?:\*)\s*([^\n]{2,80})\s*\n\s*(?:通信作者|通讯作者|corresponding)",
+        # APA citation author extraction from "How to Cite this Article" section
+        r"(?:How\s+to\s+Cite\s+this\s+Article|citation)[:：\s]*\n?\s*([A-Za-z\s,.\-\u0026]+?)\s*\(\d{4}\)",
+    ]
+    for pat in author_patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            result["author"] = re.sub(r"\s+", " ", m.group(1)).strip()
+            break
+
+    # Filter known garbage author values from fallback extraction
+    if result["author"].lower() in (
+        "how to cite this article",
+        "cnki",
+        "cnki数据库",
+        "知网",
+        "author",
+        "authors",
+    ):
+        result["author"] = ""
+
+    # --- Year extraction ---
+    year_match = re.search(r"\b(19|20)\d{2}\b", text)
+    if year_match:
+        result["year"] = year_match.group(0)
+
+    return result

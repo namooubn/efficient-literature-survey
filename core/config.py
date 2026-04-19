@@ -74,6 +74,36 @@ MONOGRAPH_PAGE_THRESHOLD: int = 200
 """Documents above this page count are typed as monographs [M] in GB/T 7714."""
 
 # ---------------------------------------------------------------------------
+# Monograph TOC extraction
+# ---------------------------------------------------------------------------
+MONOGRAPH_TOC_SCAN_PAGES: int = 20
+"""Number of pages to scan for table of contents in long documents (>100 pages)."""
+
+MONOGRAPH_KEYWORD_MATCH_MIN_PAGES: int = 3
+"""Minimum page count for a matched chapter to be considered worth reading."""
+
+MONOGRAPH_MIN_PAGES: int = 100
+"""Documents above this page count trigger TOC-aware extraction strategy."""
+
+# ---------------------------------------------------------------------------
+# PDF layout analysis (pdfplumber)
+# ---------------------------------------------------------------------------
+PDFPLUMBER_WORDS_SAMPLE_CHARS: int = 5000
+"""Characters to sample for font-size-based layout analysis."""
+
+PDFPLUMBER_MIN_FONT_FOR_TITLE: float = 10.0
+"""Minimum font size (pt) for a text block to be considered a title candidate."""
+
+PDFPLUMBER_FONT_DIFF_THRESHOLD: float = 2.0
+"""Font size difference (pt) threshold for detecting title vs body text."""
+
+# ---------------------------------------------------------------------------
+# CNKI / Chinese publisher filtering
+# ---------------------------------------------------------------------------
+CNKI_WATERMARK_KEYWORDS: tuple[str, ...] = ("中国知网", "CNKI", "www.cnki.net", "知网")
+"""Keywords that indicate CNKI watermarks to skip during metadata extraction."""
+
+# ---------------------------------------------------------------------------
 # Metadata extraction heuristics
 # ---------------------------------------------------------------------------
 META_TITLE_MIN_LEN: int = 10
@@ -82,5 +112,5 @@ META_TITLE_MIN_LEN: int = 10
 META_TITLE_MAX_LEN: int = 200
 """Maximum character length for a candidate title extracted from first-page text."""
 
-META_TITLE_CANDIDATE_LINES: int = 3
+META_TITLE_CANDIDATE_LINES: int = 5
 """Number of first-page lines to consider as title candidates."""

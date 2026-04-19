@@ -29,6 +29,11 @@ description: Use when the user needs to batch-read academic literature (10+ file
   - Stage 2 cluster map is shown; auto-advance to Stage 3 (merged checkpoint).
   - Stage 3 reading summary is shown; MUST pause for user confirmation before Stage 4.
   - Stage 0 and Stage 2 checkpoints remain; Stage 2→3 checkpoints are merged into one "map + plan" summary.
+- **Mode D (Semi-Fast Mode)**: Triggered when (a) all 5 configs are provided, AND (b) user does NOT explicitly say "逐阶段确认". In this mode:
+  - Stage 1 results are shown; auto-advance to Stage 2.
+  - Stage 2 cluster map + reading plan are merged into ONE output; MUST pause for user confirmation before Stage 3.
+  - Stage 3 reading summary is shown; MUST pause for user confirmation before Stage 4.
+  - **Critical rule**: Even in Mode D, the agent MUST NOT proceed from Stage 2→3 without explicit user confirmation of the cluster map + reading plan. This is the single non-negotiable checkpoint.
 
 ## Stage 0: User Configuration (REQUIRED — hold here until all 5 collected)
 
@@ -60,14 +65,15 @@ This checks:
 
 **If missing deps**: `pip install PyPDF2 PyCryptodome pdfplumber python-docx ebooklib beautifulsoup4`
 **If Windows GBK**: run `chcp 65001` or `set PYTHONIOENCODING=utf-8`
-**If encrypted PDFs detected**: user must decrypt before proceeding.
+**If encrypted PDFs detected**: distinguish light vs full encryption (see Decision points below).
 
 ### Step 1: Run Extraction
 
-Run `extract_literature_metadata.py <folder_path>` to extract:
+Run `extract_literature_metadata.py <folder_path> [--keywords "kw1,kw2"]` to extract:
 - Title, author, year, page count, word count
 - Journal/volume/issue/page-range/DOI (heuristic detection)
-- Scanned-image flag, encrypted flag, first-page preview text
+- Scanned-image flag, encrypted flag (with tier: light/full), first-page preview text
+- **Monograph TOC + keyword-matched chapters** (for PDFs >100 pages)
 - Duplicate detection
 
 **Output**: `_literature_extraction.json` + `_literature_report.md` + optional `_literature_references.bib`.
@@ -76,8 +82,11 @@ Run `extract_literature_metadata.py <folder_path>` to extract:
 
 **Decision points**:
 - Scanned/image PDF → warn user; suggest `marker` / `nougat` / `tesseract` OCR.
-- Encrypted PDF → flag `is_encrypted`; user must decrypt.
+- Encrypted PDF → tiered handling:
+  - **Light encryption** (`encryption_level: light`): PyPDF2 flags encrypted but pdfplumber can read text normally. Script auto-decrypts with empty password. Proceed normally.
+  - **Full encryption** (`encryption_level: full`): Both PyPDF2 and pdfplumber fail. Flag and ask user to decrypt manually.
 - CAJ detected → instruct conversion to PDF.
+- Monograph (>100 pages) with TOC match → report matched chapters with page ranges in Stage 1 output. These become P0 core reading targets.
 - >40 refs → batch by subfolder or cluster.
 
 **[USER_CHECKPOINT]**: Present Stage 1 results table. WAIT for user acknowledgment before Stage 2.
@@ -123,7 +132,9 @@ Score each cluster using the user's Stage 0 research positioning keywords as exp
 
 **[USER_CHECKPOINT]**: Present reading plan (which P0/P1/P2, at what depth). WAIT for confirmation.
 
-**Fast Mode exception (Mode C)**: If user already confirmed the Stage 2 cluster map with "直接走", merge this checkpoint into Stage 2's summary. Present the reading plan as part of the cluster map output, then auto-advance.
+**Mode C exception**: If user already confirmed the Stage 2 cluster map with "直接走", merge this checkpoint into Stage 2's summary. Present the reading plan as part of the cluster map output, then auto-advance.
+
+**Mode D exception**: The merged "cluster map + reading plan" output in Mode D MUST still wait for user confirmation before proceeding to actual reading execution. Do NOT silently execute Stage 3 reading just because the plan was shown.
 
 ### P0 (Core) — 5-8 refs
 1. Read first 2,000 chars for structure.
@@ -221,13 +232,15 @@ python extract_literature_metadata.py <folder_path> [--max-pages N] [--citation-
 |-----------|--------|
 | 30+ files in folder | Run Stage 1 immediately (Mode A) |
 | Scanned/image PDF | Flag; suggest OCR tools |
-| Encrypted PDF | Flag `is_encrypted`; user must decrypt |
-| Monograph >200 pages | Extract TOC; read 2-3 relevant chapters only |
+| Light encrypted PDF | Auto-decrypt; proceed normally |
+| Full encrypted PDF | Flag `encryption_level: full`; user must decrypt |
+| Monograph >100 pages | Extract TOC; match chapters by keywords; read matched chapters |
 | No chapter structure | Hold at Stage 0; do not guess |
 | No research positioning | Hold at Stage 0; do not cluster blindly |
 | Weak reference | Exclude; note as "tangential" in map |
 | User wants "save tokens" | Emphasize P0/P1/P2 tier system |
 | User says "直接走/全速推进" | Enable **Mode C (Fast Mode)** |
+| User gives all configs but does NOT say "逐阶段确认" | Enable **Mode D (Semi-Fast Mode)** |
 | CAJ files | Instruct conversion to PDF |
 | Adding new refs mid-workflow | Use **Append Mode** |
 | `_literature_extraction.json` exists | Skip Stage 1; proceed to Stage 2 |

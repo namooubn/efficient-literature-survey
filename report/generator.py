@@ -22,6 +22,9 @@ def generate_markdown_report(
     """Generate a human-readable Markdown report from extraction results."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     scanned = [r for r in results if r["is_scanned"]]
+    light_encrypted = [r for r in results if r.get("encryption_level") == "light"]
+    full_encrypted = [r for r in results if r.get("encryption_level") == "full"]
+    monographs = [r for r in results if r.get("matched_chapters")]
     by_format = {}
     by_subdir: dict[str, list] = {}
     for r in results:
@@ -46,6 +49,9 @@ def generate_markdown_report(
         f"| 总页数（含估算） | {total_pages} 页 |",
         f"| 总字数（含估算） | {total_words} 字 |",
         f"| 扫描件（需 OCR） | {len(scanned)} 篇 |",
+        f"| 轻度加密（可提取） | {len(light_encrypted)} 篇 |",
+        f"| 完全加密（需解密） | {len(full_encrypted)} 篇 |",
+        f"| 专著章节匹配 | {len(monographs)} 篇 |",
         f"| 疑似重复 | {dup_count} 篇 |",
         f"| 格式分布 | {', '.join(f'{k}: {len(v)} 篇' for k, v in by_format.items())} |",
         "",
@@ -61,6 +67,39 @@ def generate_markdown_report(
             lines.append(f"| {r['filename']} | {r['pages']} | 扫描 PDF，无法直接提取全文 |")
         lines.append("")
         lines.append(OCR_GUIDANCE)
+        lines.append("")
+
+    if light_encrypted:
+        lines.extend([
+            "## 🔓 轻度加密 PDF（可自动提取）\n",
+            "| 文件名 | 页数 | 状态 |",
+            "|--------|------|------|",
+        ])
+        for r in light_encrypted:
+            lines.append(f"| {r['filename']} | {r['pages']} | 轻度加密，pdfplumber 可正常读取 |")
+        lines.append("")
+
+    if full_encrypted:
+        lines.extend([
+            "## 🔒 完全加密 PDF（需手动解密）\n",
+            "| 文件名 | 页数 | 状态 |",
+            "|--------|------|------|",
+        ])
+        for r in full_encrypted:
+            lines.append(f"| {r['filename']} | {r['pages']} | 完全加密，PyPDF2 + pdfplumber 均无法读取 |")
+        lines.append("")
+
+    if monographs:
+        lines.extend([
+            "## 📖 专著章节匹配结果\n",
+            "| 文件名 | 匹配章节 | 页码范围 |",
+            "|--------|---------|---------|",
+        ])
+        for r in monographs:
+            for ch in r["matched_chapters"]:
+                lines.append(
+                    f"| {r['filename']} | {ch['chapter']} | p.{ch['page_start']}-{ch['page_end']} |"
+                )
         lines.append("")
 
     if duplicates:
