@@ -62,13 +62,18 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 python extract_literature_metadata.py /path/to/your/literature/folder
 ```
 
+... 更多命令用法见脚本内 `--help`
+
 **方式二：Claude Code Skill 自动触发**
 
-说出以下关键词即可激活：
+**直接触发（推荐）：** 在输入框输入 `/efficient-literature-survey` 回车即可。
+
+**自然语言触发：** 说出以下关键词亦可激活：
 - "帮我读文献写绪论和综述"
 - "快速理解大量文献"
 - "节省 token 读论文"
 - "我有 30 篇文献需要写文献综述"
+- ... 更多触发词见 [SKILL.md](SKILL.md) 的 Triggers 部分
 
 ### 兼容性说明
 

@@ -56,13 +56,18 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 python extract_literature_metadata.py /path/to/your/literature/folder
 ```
 
+... More CLI options via `--help`
+
 **Via Claude Code Skill:**
 
-Auto-triggers when you say:
+**Direct trigger (recommended):** Type `/efficient-literature-survey` in the input box and press Enter.
+
+**Natural language triggers:**
 - "Help me read papers and write an introduction and literature review"
 - "Quickly understand a large number of references"
 - "Save tokens reading papers"
 - "I have 30 papers to write a literature review"
+- ... More triggers in [SKILL.md](SKILL.md)
 
 ### Compatibility
 
