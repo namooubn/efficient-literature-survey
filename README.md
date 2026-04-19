@@ -73,8 +73,8 @@ python extract_pdf_metadata.py /path/to/your/pdf/folder
 efficient-literature-survey/
 ├── SKILL.md                  # Claude 读取的核心 skill 文档（仅 Claude Code 有效）
 ├── extract_pdf_metadata.py   # 独立批量提取脚本（任何 Python 环境可用）
-├── README.md                 # 本文件（中文）
-└── README_EN.md              # 英文版本
+├── README.md                 # 中文版本（本文件）
+└── README_EN.md              # English version
 ```
 
 ### 为什么能省 Token

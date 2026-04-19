@@ -1,6 +1,6 @@
 # efficient-literature-survey
 
-[中文](README.md) | **English**
+[Chinese](README.md) | **English**
 
 ---
 
@@ -47,9 +47,9 @@ python extract_pdf_metadata.py /path/to/your/pdf/folder
 **Via Claude Code Skill:**
 
 Auto-triggers when you say:
-- "帮我读文献写绪论和综述"
-- "快速理解大量PDF"
-- "节省token读论文"
+- "Help me read papers and write an introduction and literature review"
+- "Quickly understand a large number of PDFs"
+- "Save tokens reading papers"
 - "I have 30 papers to write a literature review"
 
 ### Compatibility
@@ -60,6 +60,16 @@ Auto-triggers when you say:
 | `SKILL.md` | **Claude Code only** | Requires Claude Code's skill system to be read and auto-triggered by AI |
 
 If you don't use Claude Code, you can still use the **Python script standalone** for Stage 1 (batch extraction). Stages 2-4 must be done manually.
+
+### Directory Structure
+
+```
+efficient-literature-survey/
+├── SKILL.md                  # Core skill document for Claude (Claude Code only)
+├── extract_pdf_metadata.py   # Standalone batch extraction script (any Python env)
+├── README.md                 # Chinese version
+└── README_EN.md              # English version (this file)
+```
 
 ### How It Saves Tokens
 
