@@ -24,16 +24,16 @@ Supports **custom chapter structures** or **default templates** (Chinese / Engli
   <tr>
     <td>1. Extract</td>
     <td>Script extracts metadata from all literature files</td>
-    <td>JSON report (titles/authors/pages/word count/text volume/scan detection)</td>
+    <td>JSON report + Markdown summary (titles/authors/pages/word count/text volume/scan detection)</td>
   </tr>
   <tr>
     <td>2. Cluster</td>
     <td>Group into 5-8 thematic clusters, <b>score relevance against user's positioning</b> (Direct/Adjacent/Peripheral/Tangential), then assign reading tiers</td>
-    <td>Literature map (P0/P1/P2 reading tiers)</td>
+    <td>Literature map (P0/P1/P2 reading tiers) — <b>user confirmation required before proceeding</b></td>
   </tr>
   <tr>
     <td>3. Read</td>
-    <td>Read by tier (full / abstract+conclusion / abstract only)</td>
+    <td>Read by tier (full / abstract+conclusion / abstract only) — <b>reading plan confirmed by user before execution</b></td>
     <td>Extracted arguments and quotes</td>
   </tr>
   <tr>
@@ -43,14 +43,47 @@ Supports **custom chapter structures** or **default templates** (Chinese / Engli
   </tr>
 </table>
 
+---
+
+## 5-Minute Quick Start
+
+### Scenario: You have a folder of references and want to write a literature review quickly
+
+**Step 1: Install**
+
+```bash
+mkdir -p ~/.claude/skills/
+cp -r efficient-literature-survey ~/.claude/skills/
+pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
+```
+
+**Step 2: Open Claude Code and say**
+
+> "Help me write a literature review. My references are in `/Users/alice/Documents/references`."
+
+**Step 3: Claude will guide you through this flow**
+
+| Turn | What Claude Does | What You Do |
+|------|-----------------|-------------|
+| 1 | Scans the folder, tells you how many files, what formats, any scanned PDFs | Check the count, confirm |
+| 2 | Asks: language, citation style, research topic, chapter structure template | Answer the 4 questions |
+| 3 | Clusters references by theme, shows the map with priorities (P0/P1/P2) | Confirm or say "move [file] to P0" |
+| 4 | Shows reading plan: which to read fully, which to skim | Confirm or adjust reading depth |
+| 5 | Reads references by tier, extracts arguments | Wait for Claude to finish |
+| 6 | Outputs introduction + literature review draft | Review and request revisions |
+
+**You can pause, adjust, or redirect Claude at any turn.**
+
+---
+
 ### Supported Formats Matrix
 
 | Format | Metadata Extracted | pages | word_count | Scan Detection | Dependencies |
 |--------|-------------------|-------|-----------|----------------|--------------|
-| **PDF** | Title, author, pages, word count, text volume | ✅ Real page count | ✅ | ✅ Yes | PyPDF2 + pdfplumber |
-| **DOCX** | Title, author, word count, text volume | ✅ Estimated (chars÷500) | ✅ | ❌ No | python-docx |
-| **TXT / MD** | Word count, text volume | ✅ Estimated | ✅ | ❌ No | Built-in |
-| **EPUB** | Title, author, word count, text volume | ✅ Estimated | ✅ | ❌ No | ebooklib + beautifulsoup4 |
+| **PDF** | Title, author, pages, word count, text volume | ✅ Real page count | ✅ Smart CJK/English mixed counting | ✅ Yes | PyPDF2 + pdfplumber |
+| **DOCX** | Title, author, word count, text volume | ✅ Estimated (chars÷500) | ✅ Smart CJK/English mixed counting | ❌ No | python-docx |
+| **TXT / MD** | Word count, text volume | ✅ Estimated | ✅ Smart CJK/English mixed counting | ❌ No | Built-in |
+| **EPUB** | Title, author, word count, text volume | ✅ Estimated | ✅ Smart CJK/English mixed counting | ❌ No | ebooklib + beautifulsoup4 |
 | **CAJ** | Filename only | ❌ | ❌ | N/A | Prompts user to convert to PDF (CAJViewer / caj2pdf) |
 
 ### Real-World Results
@@ -81,6 +114,15 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 ```bash
 python extract_literature_metadata.py /path/to/your/literature/folder
 ```
+
+Interactive CLI features:
+- No arguments → prompts for path interactively
+- Path does not exist → prompts to re-enter
+- No supported files found → lists what was detected and why they were skipped
+
+Outputs:
+- `_literature_extraction.json` — structured data
+- `_literature_report.md` — human-readable summary report
 
 ... Supports mixed folders of PDF / DOCX / TXT / MD / EPUB
 
