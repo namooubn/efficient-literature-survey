@@ -29,7 +29,7 @@ A four-stage workflow that compresses millions of words of literature into a str
 
 ### Stage 0: User Configuration (Required)
 
-**BEFORE running Stage 1, collect the following from the user. Do not proceed to Stage 4 without all four.**
+**BEFORE running Stage 1, collect the following from the user. Do not proceed to Stage 4 without all five.**
 
 | Config Item | Question to Ask | Examples |
 |-------------|-----------------|----------|
@@ -37,6 +37,7 @@ A four-stage workflow that compresses millions of words of literature into a str
 | **Citation format** | "What citation style should I use?" | APA, MLA, Chicago, GB/T 7714, author-year `(Smith, 2004)`, numbered `[1]`, etc. |
 | **Chapter structure** | "Do you want to provide your own chapter structure, or use a default template?" | User says "custom" or "default" |
 | **User research positioning** | "To judge relevance, please provide your thesis title, abstract, research question, OR 3-5 keywords — whichever is easiest for you." | "短视频平台算法推荐对新闻消费行为的影响" OR "algorithmic recommendation, news consumption, short video, platform logic, user behavior" |
+| **Literature folder path** | "Where are your literature files located? Please provide the full folder path." | `/Users/alice/Documents/thesis/references` or `D:\论文\参考文献` |
 
 **Research positioning — two input modes (user chooses whichever is easier):**
 
@@ -127,7 +128,7 @@ Chapter 2 Literature Review and Theoretical Framework
 
 **Rules:**
 - If the user has not provided all four configs, **ask before proceeding**. Do not guess.
-- Record all four configs (language, citation format, chosen structure, research positioning) at the top of the literature map document for reference throughout the workflow.
+- Record all five configs (language, citation format, chosen structure, research positioning, literature folder path) at the top of the literature map document for reference throughout the workflow.
 - If the user chose "custom" but hasn't provided the structure yet, **hold at Stage 0** until they do.
 
 ### Stage 1: Batch Extract Literature Metadata
@@ -251,7 +252,7 @@ Write the introduction and literature review according to the **user's prescribe
 4. **Guessing the thesis structure.** If the user hasn't provided the exact heading hierarchy (e.g., 2.2.1 vs 2.2.2), ask in Stage 0 before writing. A mismatched structure requires full rewrite.
 5. **Ignoring weak references.** Weak or tangential references should be explicitly flagged and potentially excluded. Citing irrelevant papers damages credibility.
 6. **Skipping the gap analysis.** A literature review without a clear "what's missing → here's my study" transition fails its purpose. Stage 4 must end with the user's research positioning.
-7. **Skipping Stage 0 configuration.** Writing without confirming language, citation format, chapter structure, and research positioning guarantees a mismatch with user expectations. Stage 0 is a hard prerequisite.
+7. **Skipping Stage 0 configuration.** Writing without confirming language, citation format, chapter structure, research positioning, and literature folder path guarantees a mismatch with user expectations. Stage 0 is a hard prerequisite.
 
 ## Reusable Tool
 
