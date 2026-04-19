@@ -299,9 +299,9 @@ def extract_info(file_path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def main():
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} /path/to/literature/folder")
-        sys.exit(1)
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        sys.exit(0 if sys.argv[1:] and sys.argv[1] in ("-h", "--help") else 1)
 
     lit_dir = Path(sys.argv[1])
 

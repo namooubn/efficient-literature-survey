@@ -1,13 +1,13 @@
 ---
 name: efficient-literature-survey
-description: Use when the user needs to read a large number of literature references (10+) in PDF, DOCX, TXT, MD, or EPUB format and write a thesis introduction and literature review. Triggers include phrases like "帮我读文献", "写绪论和综述", "快速理解大量文献", "节省token读论文", "literature review", "thesis introduction", "batch read papers", "write my literature review", "帮我写文献综述", "批量读PDF写论文", "efficient literature survey", "save tokens reading papers", or when the user has a folder of literature files and needs structured academic output.
+description: Use when the user needs to read a large number of literature references (10+) in PDF, DOCX, TXT, MD, or EPUB format and write a thesis introduction and literature review. Triggers include phrases like "帮我读文献", "写绪论和综述", "快速理解大量文献", "节省token读论文", "literature review", "thesis introduction", "batch read papers", "write my literature review", "帮我写文献综述", "批量读PDF写论文", "efficient literature survey", "save tokens reading papers", typing `/efficient-literature-survey`, or when the user has a folder of literature files and needs structured academic output.
 ---
 
 # Efficient Literature Survey Workflow
 
 ## Overview
 
-A four-stage workflow that compresses millions of words of literature into a structured literature map, then writes a thesis introduction and literature review. **Core principle:** Never read every word — extract metadata, cluster by theme, and read only what the output needs.
+A five-stage workflow (Stage 0–4) that compresses millions of words of literature into a structured literature map, then writes a thesis introduction and literature review. **Core principle:** Never read every word — extract metadata, cluster by theme, and read only what the output needs.
 
 **Supported formats:** PDF, DOCX (Word), TXT, MD (Markdown), EPUB. CAJ files are detected but require manual conversion to PDF first.
 
@@ -90,44 +90,8 @@ Chapter 2 Literature Review and Theoretical Framework
   2.3 Critical Review and Research Gap (contributions → limitations → this study's entry point)
 ```
 
-**Chapter structure — two paths:**
-
-**Path A: User provides custom structure**
-- Ask: "Please provide your exact chapter/section hierarchy (e.g., 1.1 Background → 1.2 Significance → 1.3 Methods; 2.1 Concepts → 2.2 Theory → 2.3 Review)"
-- Record verbatim. Stage 4 must follow this exactly.
-
-**Path B: User chooses default template**
-- Ask: "Which default template do you prefer — Chinese thesis structure or English thesis structure?"
-- Present both options and let the user pick one.
-
-**Default Chinese Thesis Structure:**
-```
-第一章 绪论
-  1.1 研究背景与问题提出
-  1.2 研究目的与意义（理论意义 + 实践意义）
-  1.3 研究思路与方法概述
-
-第二章 文献综述与理论框架
-  2.1 核心概念界定
-  2.2 理论基础与文献回顾（按主题簇组织）
-  2.3 文献评述与研究空间（贡献 → 不足 → 本研究切入点）
-```
-
-**Default English Thesis Structure:**
-```
-Chapter 1 Introduction
-  1.1 Research Background and Problem Statement
-  1.2 Research Objectives and Significance
-  1.3 Research Design and Methodology Overview
-
-Chapter 2 Literature Review and Theoretical Framework
-  2.1 Key Concepts and Definitions
-  2.2 Theoretical Foundations and Literature Review (organized by thematic clusters)
-  2.3 Critical Review and Research Gap (contributions → limitations → this study's entry point)
-```
-
 **Rules:**
-- If the user has not provided all four configs, **ask before proceeding**. Do not guess.
+- If the user has not provided all five configs, **ask before proceeding**. Do not guess.
 - Record all five configs (language, citation format, chosen structure, research positioning, literature folder path) at the top of the literature map document for reference throughout the workflow.
 - If the user chose "custom" but hasn't provided the structure yet, **hold at Stage 0** until they do.
 

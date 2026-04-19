@@ -82,7 +82,7 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 python extract_literature_metadata.py /path/to/your/literature/folder
 ```
 
-... More CLI options via `--help`
+... Supports mixed folders of PDF / DOCX / TXT / MD / EPUB
 
 **Via Claude Code Skill:**
 

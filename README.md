@@ -88,7 +88,7 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 python extract_literature_metadata.py /path/to/your/literature/folder
 ```
 
-... 更多命令用法见脚本内 `--help`
+... 支持 PDF / DOCX / TXT / MD / EPUB 多格式混合文件夹
 
 **方式二：Claude Code Skill 自动触发**
 
