@@ -199,6 +199,12 @@ Compare each cluster's theme against the user's research positioning (Stage 0). 
 - **P1 (Support):** 15-20 references. Read abstract + conclusion + sections directly relevant to the user's research question.
 - **P2 (Background):** Remaining references. Read abstract only; confirm their positioning sentence (e.g., "This paper reviews early work in X").
 
+**Context overflow guard — [CONTEXT_OVERFLOW] in Stage 2:**
+If the total number of references exceeds 40, or if the combined title + preview text exceeds your context window capacity:
+1. Ask the user to filter by format (e.g., "只看 PDF" or "排除 EPUB") before clustering.
+2. If still too large, cluster in **batches** — process the first 30-35 references first, then the remainder in a second pass. Merge clusters thematically between batches.
+3. If a single monograph's preview text alone is very long (>5,000 chars), truncate it before clustering.
+
 **[USER_CHECKPOINT]: Present the complete literature map to the user and WAIT for confirmation.**
 
 Show the user:
@@ -242,6 +248,13 @@ Show the user:
 **For P2 references:**
 - Confirm from abstract: what does this paper do? Where does it fit in the map?
 - Write a one-sentence positioning note.
+
+**Context overflow guard — [CONTEXT_OVERFLOW] in Stage 3:**
+If the combined full-text word count of all P0 + P1 references exceeds 100,000 words (~300k chars):
+1. Keep P0 references at full-text reading.
+2. Downgrade **all P1 references** to "abstract + conclusion only" (no keyword-matched sections).
+3. If still overflowing, keep only the **top 5 P0 references** by relevance and downgrade the rest to P1.
+4. Alert the user: "文献总量过大，已自动降级部分文献的阅读深度以节省上下文空间。"
 
 **For scanned monographs (300+ pages):**
 - Do NOT attempt OCR of the entire book.

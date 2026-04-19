@@ -92,7 +92,10 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 |---------|-------------|--------|
 | **Concurrent extraction** | `ThreadPoolExecutor(max_workers=4)` parallelizes file I/O | ~2-3x faster for 30+ files |
 | **Incremental caching** | SHA-256 file hashing skips unchanged files on re-runs | Subsequent runs complete in seconds |
+| **Smart page-reading strategy** | Short docs (≤50 pages) read fully; monographs (>50 pages) sample first 15 + last 5 | Avoids front-matter bias on monographs for scan detection and word counts |
 | **Multi-page scan detection** | Samples beginning, middle, and end pages of PDFs | Greatly reduces false positives from image-only cover pages |
+| **Duplicate detection** | Auto-flags duplicate references by title similarity (SequenceMatcher ≥80%) | Prevents multi-format duplicates from being cited twice |
+| **Citation generation** | Auto-generates citations in GB/T 7714, APA, MLA, and numbered styles | Reduces citation-format inconsistency in Stage 4 |
 | **Structured error logging** | Extraction failures are recorded in report notes | No more silent failures |
 
 ### Real-World Results
@@ -124,14 +127,18 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 python extract_literature_metadata.py /path/to/your/literature/folder
 ```
 
+CLI flags:
+- `--max-pages N` / `-m N`: Force read only the first N pages (overrides smart paging)
+- `--citation-style gb7714|apa|mla|numbered` / `-c STYLE`: Choose citation format (default: gb7714)
+
 Interactive CLI features:
 - No arguments → prompts for path interactively
 - Path does not exist → prompts to re-enter
 - No supported files found → lists what was detected and why they were skipped
 
 Outputs:
-- `_literature_extraction.json` — structured data
-- `_literature_report.md` — human-readable summary report
+- `_literature_extraction.json` — structured data (includes `duplicates`, `citation_style`, `results[].citation`)
+- `_literature_report.md` — human-readable summary report (includes duplicate detection and citation appendix)
 
 ... Supports mixed folders of PDF / DOCX / TXT / MD / EPUB
 
@@ -162,7 +169,7 @@ efficient-literature-survey/
 ├── SKILL.md                              # Core skill document for Claude (Claude Code only)
 ├── extract_literature_metadata.py        # Standalone batch extraction script (any Python env)
 ├── extract_pdf_metadata.py             # Legacy PDF-only script (backward compatible)
-├── test_extract_literature_metadata.py # Unit tests (24 test cases)
+├── test_extract_literature_metadata.py # Unit tests (52 test cases)
 ├── CHANGELOG.md                        # Version changelog
 ├── README.md                           # Chinese version
 └── README_EN.md                        # English version (this file)

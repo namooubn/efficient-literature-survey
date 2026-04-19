@@ -6,6 +6,7 @@ Run with:
 """
 
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,9 +15,43 @@ from extract_literature_metadata import (
     _detect_scanned_pdf,
     _estimate_pages_from_chars,
     _file_sha256,
+    _find_duplicates,
+    _get_pdf_read_pages,
     _safe_truncate,
     _smart_word_count,
+    extract_txt,
+    generate_citation,
 )
+
+# Optional dependencies for integration tests
+HAS_PYPDF2 = False
+HAS_PYTHON_DOCX = False
+HAS_EBOOKLIB = False
+
+try:
+    import PyPDF2  # noqa: F401
+    HAS_PYPDF2 = True
+except ImportError:
+    pass
+
+try:
+    import docx  # noqa: F401
+    HAS_PYTHON_DOCX = True
+except ImportError:
+    pass
+
+try:
+    import ebooklib  # noqa: F401
+    HAS_EBOOKLIB = True
+except ImportError:
+    pass
+
+if HAS_PYPDF2:
+    from extract_literature_metadata import extract_pdf
+if HAS_PYTHON_DOCX:
+    from extract_literature_metadata import extract_docx
+if HAS_EBOOKLIB:
+    from extract_literature_metadata import extract_epub
 
 
 class TestSmartWordCount(unittest.TestCase):
@@ -153,6 +188,299 @@ class TestFileSha256(unittest.TestCase):
         finally:
             os.unlink(p1)
             os.unlink(p2)
+
+
+class TestGetPdfReadPages(unittest.TestCase):
+    """Tests for PDF read-strategy heuristic."""
+
+    def test_short_doc_reads_all(self):
+        self.assertEqual(_get_pdf_read_pages(30), list(range(30)))
+
+    def test_exactly_50_reads_all(self):
+        self.assertEqual(_get_pdf_read_pages(50), list(range(50)))
+
+    def test_long_doc_samples(self):
+        pages = _get_pdf_read_pages(100)
+        # First 15 + last 5
+        self.assertEqual(pages[:15], list(range(15)))
+        self.assertEqual(pages[-5:], list(range(95, 100)))
+        self.assertEqual(len(pages), 20)
+
+    def test_max_pages_override(self):
+        self.assertEqual(_get_pdf_read_pages(100, max_pages=5), list(range(5)))
+
+    def test_zero_max_pages_ignored(self):
+        self.assertEqual(_get_pdf_read_pages(10, max_pages=0), list(range(10)))
+
+    def test_negative_max_pages_ignored(self):
+        self.assertEqual(_get_pdf_read_pages(10, max_pages=-3), list(range(10)))
+
+
+class TestFindDuplicates(unittest.TestCase):
+    """Tests for duplicate detection by title similarity."""
+
+    def test_exact_match(self):
+        results = [
+            {"filename": "a.pdf", "title_from_meta": "Deep Learning"},
+            {"filename": "b.pdf", "title_from_meta": "Deep Learning"},
+        ]
+        dups = _find_duplicates(results, threshold=0.90)
+        self.assertIn("a.pdf", dups)
+        self.assertIn("b.pdf", dups)
+
+    def test_no_match(self):
+        results = [
+            {"filename": "a.pdf", "title_from_meta": "Deep Learning"},
+            {"filename": "b.pdf", "title_from_meta": "Quantum Computing"},
+        ]
+        dups = _find_duplicates(results, threshold=0.90)
+        self.assertEqual(dups, {})
+
+    def test_fallback_to_filename(self):
+        results = [
+            {"filename": "same_title.pdf", "title_from_meta": ""},
+            {"filename": "same_title.pdf", "title_from_meta": ""},
+        ]
+        dups = _find_duplicates(results, threshold=0.90)
+        self.assertIn("same_title.pdf", dups)
+
+
+class TestGenerateCitation(unittest.TestCase):
+    """Tests for citation formatting across styles."""
+
+    def test_gb7714_single_author(self):
+        meta = {"author_from_meta": "张三", "title_from_meta": "人工智能导论", "filename": "x.pdf", "format": "pdf"}
+        self.assertIn("张三", generate_citation(meta, "gb7714"))
+        self.assertIn("人工智能导论", generate_citation(meta, "gb7714"))
+
+    def test_gb7714_multiple_authors(self):
+        meta = {"author_from_meta": "张三, 李四, 王五, 赵六", "title_from_meta": "深度学习", "filename": "x.pdf", "format": "pdf"}
+        cite = generate_citation(meta, "gb7714")
+        self.assertIn("张三", cite)
+        self.assertIn("等", cite)
+
+    def test_apa(self):
+        meta = {"author_from_meta": "John Smith", "title_from_meta": "AI Survey", "filename": "x.pdf", "format": "pdf"}
+        cite = generate_citation(meta, "apa")
+        self.assertIn("Smith", cite)
+        self.assertIn("AI Survey", cite)
+
+    def test_mla(self):
+        meta = {"author_from_meta": "John Smith", "title_from_meta": "AI Survey", "filename": "x.pdf", "format": "pdf"}
+        cite = generate_citation(meta, "mla")
+        self.assertIn('"AI Survey."', cite)
+
+    def test_numbered(self):
+        meta = {"author_from_meta": "", "title_from_meta": "Title", "filename": "x.pdf", "format": "pdf", "_citation_number": 5}
+        self.assertEqual(generate_citation(meta, "numbered"), "[5] Title")
+
+    def test_no_author(self):
+        meta = {"author_from_meta": "", "title_from_meta": "", "filename": "unknown.pdf", "format": "pdf"}
+        cite = generate_citation(meta, "gb7714")
+        self.assertIn("unknown.pdf", cite)
+
+
+class TestExtractTxt(unittest.TestCase):
+    """Integration tests for extract_txt (no extra deps)."""
+
+    def test_utf8_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8", suffix=".txt") as f:
+            f.write("Hello world\nSecond line")
+            path = f.name
+        try:
+            info = extract_txt(path)
+            self.assertEqual(info["word_count"], 4)
+            self.assertEqual(info["text_chars"], 23)
+            self.assertEqual(info["format"], "txt")
+        finally:
+            os.unlink(path)
+
+    def test_gbk_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="gbk", suffix=".txt") as f:
+            f.write("中文内容测试")
+            path = f.name
+        try:
+            info = extract_txt(path)
+            self.assertEqual(info["word_count"], 6)  # 6 Chinese chars
+            self.assertEqual(info["format"], "txt")
+        finally:
+            os.unlink(path)
+
+    def test_empty_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8", suffix=".txt") as f:
+            path = f.name
+        try:
+            info = extract_txt(path)
+            self.assertEqual(info["word_count"], 0)
+            self.assertEqual(info["text_chars"], 0)
+        finally:
+            os.unlink(path)
+
+    def test_md_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8", suffix=".md") as f:
+            f.write("# Title\n\nBody text here.")
+            path = f.name
+        try:
+            info = extract_txt(path)
+            self.assertEqual(info["format"], "md")
+            self.assertIn("Title", info["first_page_text"])
+        finally:
+            os.unlink(path)
+
+
+@unittest.skipUnless(HAS_PYPDF2, "PyPDF2 not installed")
+class TestExtractPdf(unittest.TestCase):
+    """Integration tests for extract_pdf."""
+
+    def _make_blank_pdf(self, page_count: int) -> str:
+        """Create a blank PDF with the given number of pages."""
+        from PyPDF2 import PdfWriter
+        writer = PdfWriter()
+        for _ in range(page_count):
+            writer.add_blank_page(width=612, height=792)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                writer.write(f)
+        except Exception:
+            os.close(fd)
+            raise
+        return path
+
+    def test_normal_pdf_pages(self):
+        path = self._make_blank_pdf(10)
+        try:
+            info = extract_pdf(path)
+            self.assertEqual(info["pages"], 10)
+            self.assertEqual(info["format"], "pdf")
+        finally:
+            os.unlink(path)
+
+    def test_short_pdf_reads_all_pages(self):
+        """Documents with <= 50 pages should have all pages sampled."""
+        path = self._make_blank_pdf(20)
+        try:
+            info = extract_pdf(path)
+            self.assertEqual(info["pages"], 20)
+            # Blank pages are flagged as scanned
+            self.assertTrue(info["is_scanned"])
+        finally:
+            os.unlink(path)
+
+    def test_long_pdf_samples_pages(self):
+        """Documents > 50 pages should sample first 15 + last 5."""
+        path = self._make_blank_pdf(100)
+        try:
+            info = extract_pdf(path)
+            self.assertEqual(info["pages"], 100)
+            # text_chars should be low because pages are blank
+            self.assertEqual(info["text_chars"], 0)
+        finally:
+            os.unlink(path)
+
+    def test_corrupted_pdf_graceful(self):
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("this is not a pdf")
+            info = extract_pdf(path)
+            self.assertIn("error", info["note"].lower())
+        finally:
+            os.unlink(path)
+
+    def test_max_pages_override(self):
+        path = self._make_blank_pdf(30)
+        try:
+            info = extract_pdf(path, max_pages=5)
+            self.assertEqual(info["pages"], 30)
+            # Only 5 pages read, but total_pages is still 30
+            self.assertEqual(info["text_chars"], 0)
+        finally:
+            os.unlink(path)
+
+
+@unittest.skipUnless(HAS_PYTHON_DOCX, "python-docx not installed")
+class TestExtractDocx(unittest.TestCase):
+    """Integration tests for extract_docx."""
+
+    def test_normal_docx(self):
+        from docx import Document
+        doc = Document()
+        doc.add_paragraph("Hello world")
+        doc.add_paragraph("Second paragraph with more text")
+
+        fd, path = tempfile.mkstemp(suffix=".docx")
+        os.close(fd)
+        try:
+            doc.save(path)
+            info = extract_docx(path)
+            self.assertEqual(info["format"], "docx")
+            self.assertGreater(info["word_count"], 0)
+            self.assertIn("Hello", info["first_page_text"])
+        finally:
+            os.unlink(path)
+
+    def test_empty_docx(self):
+        from docx import Document
+        doc = Document()
+        fd, path = tempfile.mkstemp(suffix=".docx")
+        os.close(fd)
+        try:
+            doc.save(path)
+            info = extract_docx(path)
+            self.assertEqual(info["format"], "docx")
+            self.assertEqual(info["word_count"], 0)
+        finally:
+            os.unlink(path)
+
+    def test_docx_with_author_title(self):
+        from docx import Document
+        doc = Document()
+        doc.add_paragraph("Content here")
+        doc.core_properties.author = "Test Author"
+        doc.core_properties.title = "Test Title"
+
+        fd, path = tempfile.mkstemp(suffix=".docx")
+        os.close(fd)
+        try:
+            doc.save(path)
+            info = extract_docx(path)
+            self.assertEqual(info["author_from_meta"], "Test Author")
+            self.assertEqual(info["title_from_meta"], "Test Title")
+        finally:
+            os.unlink(path)
+
+
+@unittest.skipUnless(HAS_EBOOKLIB, "ebooklib not installed")
+class TestExtractEpub(unittest.TestCase):
+    """Integration tests for extract_epub."""
+
+    def test_normal_epub(self):
+        from ebooklib import epub
+        book = epub.EpubBook()
+        book.set_identifier("test-id")
+        book.set_title("Test Book")
+        book.set_language("en")
+        book.add_author("Test Author")
+
+        c1 = epub.EpubHtml(title="Chapter 1", file_name="chap_01.xhtml", lang="en")
+        c1.content = "<html><body><p>Hello world from EPUB.</p></body></html>"
+        book.add_item(c1)
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+        book.spine = [c1]
+
+        fd, path = tempfile.mkstemp(suffix=".epub")
+        os.close(fd)
+        try:
+            epub.write_epub(path, book)
+            info = extract_epub(path)
+            self.assertEqual(info["format"], "epub")
+            self.assertEqual(info["title_from_meta"], "Test Book")
+            self.assertEqual(info["author_from_meta"], "Test Author")
+            self.assertIn("Hello", info["first_page_text"])
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":

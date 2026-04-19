@@ -100,6 +100,150 @@ def _detect_scanned_pdf(page_texts: list, total_pages: int) -> bool:
     return False
 
 
+def _get_pdf_read_pages(total_pages: int, max_pages: int = 0) -> list[int]:
+    """
+    Decide which pages to read based on document length.
+
+    - Short docs (<= 50 pages): read all pages.
+    - Long docs (> 50 pages): read first 15 + last 5 pages to avoid
+      getting stuck in front-matter (cover, TOC, preface) while still
+      sampling the body and conclusion.
+    - max_pages > 0 overrides the heuristic and caps total pages read.
+    """
+    if max_pages > 0:
+        return list(range(min(total_pages, max_pages)))
+    if total_pages <= 50:
+        return list(range(total_pages))
+    # Monograph strategy
+    pages = list(range(min(15, total_pages)))
+    pages.extend(range(max(0, total_pages - 5), total_pages))
+    return sorted(set(pages))
+
+
+# ---------------------------------------------------------------------------
+# Duplicate detection
+# ---------------------------------------------------------------------------
+
+import difflib  # noqa: E402
+
+
+def _find_duplicates(results: list[dict], threshold: float = 0.80) -> dict[str, list[str]]:
+    """
+    Detect duplicate references by title similarity (SequenceMatcher).
+    Returns {filename: [list of duplicate filenames]}.
+    """
+    dups: dict[str, list[str]] = {}
+    n = len(results)
+    for i in range(n):
+        title_i = (results[i].get("title_from_meta") or results[i]["filename"]).lower().strip()
+        if not title_i:
+            continue
+        for j in range(i + 1, n):
+            title_j = (results[j].get("title_from_meta") or results[j]["filename"]).lower().strip()
+            if not title_j:
+                continue
+            ratio = difflib.SequenceMatcher(None, title_i, title_j).ratio()
+            if ratio >= threshold:
+                fi = results[i]["filename"]
+                fj = results[j]["filename"]
+                dups.setdefault(fi, []).append(f"{fj} (相似度 {ratio:.0%})")
+                dups.setdefault(fj, []).append(f"{fi} (相似度 {ratio:.0%})")
+    # deduplicate values
+    for k in dups:
+        seen = set()
+        uniq = []
+        for v in dups[k]:
+            if v not in seen:
+                seen.add(v)
+                uniq.append(v)
+        dups[k] = uniq
+    return dups
+
+
+# ---------------------------------------------------------------------------
+# Citation generation
+# ---------------------------------------------------------------------------
+
+def _normalize_author(author_raw: str) -> list[str]:
+    """Split author string into individual names."""
+    if not author_raw:
+        return []
+    # Split on common separators
+    parts = re.split(r"[,;，；/&]", author_raw)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def generate_citation(metadata: dict, style: str = "numbered") -> str:
+    """
+    Generate a formatted citation string from metadata.
+
+    Supported styles:
+      - "gb7714"   : GB/T 7714 Chinese standard
+      - "apa"      : APA 7th edition (simplified)
+      - "mla"      : MLA 9th edition (simplified)
+      - "numbered" : [N] numeric citation
+    """
+    title = (metadata.get("title_from_meta") or metadata.get("filename", "")).strip()
+    author_raw = metadata.get("author_from_meta", "").strip()
+    authors = _normalize_author(author_raw)
+    fmt = metadata.get("format", "").upper()
+
+    if style == "gb7714":
+        if not authors:
+            author_str = "佚名"
+        elif len(authors) == 1:
+            author_str = authors[0]
+        elif len(authors) == 2:
+            author_str = f"{authors[0]}, {authors[1]}"
+        elif len(authors) == 3:
+            author_str = f"{authors[0]}, {authors[1]}, {authors[2]}"
+        else:
+            author_str = f"{authors[0]} 等"
+        return f"[{author_str}]. {title}[{fmt}]."
+
+    if style == "apa":
+        if not authors:
+            author_str = "Anonymous"
+        elif len(authors) == 1:
+            author_str = _apa_name(authors[0])
+        elif len(authors) == 2:
+            author_str = f"{_apa_name(authors[0])} & {_apa_name(authors[1])}"
+        else:
+            author_str = f"{_apa_name(authors[0])} et al."
+        return f"{author_str} {title}."
+
+    if style == "mla":
+        if not authors:
+            author_str = "Anonymous"
+        else:
+            author_str = _mla_name(authors[0])
+            if len(authors) > 1:
+                author_str += f", et al."
+        return f'"{title}." {author_str}.'
+
+    # default numbered
+    return f"[{metadata.get('_citation_number', '')}] {title}"
+
+
+def _apa_name(name: str) -> str:
+    """Convert 'Zhang San' or 'San Zhang' to APA-style 'Zhang, S.' heuristic."""
+    parts = name.split()
+    if len(parts) >= 2 and len(parts[-1]) == 1:
+        # Likely 'San Z.' format
+        return f"{parts[-1]}, {''.join(p[0] + '.' for p in parts[:-1])}"
+    if len(parts) >= 2:
+        return f"{parts[-1]}, {parts[0][0]}."
+    return name
+
+
+def _mla_name(name: str) -> str:
+    """Convert name to MLA-style 'Last, First' heuristic."""
+    parts = name.split()
+    if len(parts) >= 2:
+        return f"{parts[-1]}, {parts[0]}"
+    return name
+
+
 # ---------------------------------------------------------------------------
 # Incremental / caching helpers
 # ---------------------------------------------------------------------------
@@ -177,7 +321,7 @@ def _interactive_prompt_unsupported(skipped: list, supported_exts: set) -> None:
 # Extractors by format
 # ---------------------------------------------------------------------------
 
-def extract_pdf(pdf_path: str) -> dict:
+def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
     """Extract metadata and text sample from a single PDF."""
     result = {
         "filename": os.path.basename(pdf_path),
@@ -201,17 +345,18 @@ def extract_pdf(pdf_path: str) -> dict:
             result["author_from_meta"] = str(meta.get("/Author", ""))
             result["title_from_meta"] = str(meta.get("/Title", ""))
 
-        page_texts = []
+        read_pages = _get_pdf_read_pages(result["pages"], max_pages)
+        page_texts: list[str] = [""] * result["pages"]
         total_text = ""
-        for i, page in enumerate(reader.pages[:15]):
+        for i in read_pages:
             try:
+                page = reader.pages[i]
                 txt = page.extract_text() or ""
-                page_texts.append(txt)
+                page_texts[i] = txt
                 total_text += txt
                 if i == 0:
                     result["first_page_text"] = _safe_truncate(txt)
             except Exception as e:
-                page_texts.append("")
                 if not result["note"]:
                     result["note"] = ""
                 result["note"] += f"Page {i} extract error: {type(e).__name__}; "
@@ -223,16 +368,17 @@ def extract_pdf(pdf_path: str) -> dict:
         result["note"] += f"PyPDF2 error: {type(e).__name__}: {e}; "
 
     # Fallback to pdfplumber if PyPDF2 extracted very little text
-    if result["text_chars"] < 500:
+    if result["text_chars"] < 500 and result["pages"] > 0:
         try:
             import pdfplumber
             with pdfplumber.open(pdf_path) as pdf:
                 result["pages"] = len(pdf.pages)
-                page_texts = []
+                read_pages = _get_pdf_read_pages(result["pages"], max_pages)
+                page_texts = [""] * result["pages"]
                 total_text = ""
-                for i, page in enumerate(pdf.pages[:15]):
-                    txt = page.extract_text() or ""
-                    page_texts.append(txt)
+                for i in read_pages:
+                    txt = pdf.pages[i].extract_text() or ""
+                    page_texts[i] = txt
                     total_text += txt
                     if i == 0:
                         result["first_page_text"] = _safe_truncate(txt)
@@ -396,12 +542,12 @@ SUPPORTED_EXTS = {".pdf", ".docx", ".txt", ".md", ".epub"}
 CAJ_EXT = {".caj"}
 
 
-def extract_info(file_path: str) -> dict:
+def extract_info(file_path: str, max_pages: int = 0) -> dict:
     """Dispatch to the correct extractor based on file extension."""
     ext = Path(file_path).suffix.lower()
 
     if ext == ".pdf":
-        return extract_pdf(file_path)
+        return extract_pdf(file_path, max_pages=max_pages)
     if ext == ".docx":
         return extract_docx(file_path)
     if ext in (".txt", ".md"):
@@ -441,7 +587,13 @@ def extract_info(file_path: str) -> dict:
 # Markdown report generator
 # ---------------------------------------------------------------------------
 
-def generate_markdown_report(results: list, lit_dir: Path, skipped: list) -> str:
+def generate_markdown_report(
+    results: list,
+    lit_dir: Path,
+    skipped: list,
+    duplicates: dict | None = None,
+    citation_style: str = "gb7714",
+) -> str:
     """Generate a human-readable Markdown report from extraction results."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     scanned = [r for r in results if r["is_scanned"]]
@@ -452,6 +604,7 @@ def generate_markdown_report(results: list, lit_dir: Path, skipped: list) -> str
 
     total_pages = sum(r["pages"] for r in results)
     total_words = sum(r["word_count"] for r in results)
+    dup_count = len(duplicates) if duplicates else 0
 
     lines = [
         "# 文献提取报告\n",
@@ -464,6 +617,7 @@ def generate_markdown_report(results: list, lit_dir: Path, skipped: list) -> str
         f"| 总页数（含估算） | {total_pages} 页 |",
         f"| 总字数（含估算） | {total_words} 字 |",
         f"| 扫描件（需 OCR） | {len(scanned)} 篇 |",
+        f"| 疑似重复 | {dup_count} 篇 |",
         f"| 格式分布 | {', '.join(f'{k}: {len(v)} 篇' for k, v in by_format.items())} |",
         "",
     ]
@@ -478,10 +632,20 @@ def generate_markdown_report(results: list, lit_dir: Path, skipped: list) -> str
             lines.append(f"| {r['filename']} | {r['pages']} | 扫描 PDF，无法直接提取全文 |")
         lines.append("")
 
+    if duplicates:
+        lines.extend([
+            "## 🔁 疑似重复文献\n",
+            "| 文件名 | 疑似重复对象 |",
+            "|--------|-------------|",
+        ])
+        for fname, dlist in sorted(duplicates.items()):
+            lines.append(f"| {fname} | {'; '.join(dlist)} |")
+        lines.append("")
+
     lines.extend([
         "## 文献详情（按文件名排序）\n",
-        "| 文件名 | 格式 | 页数 | 字数 | 作者 | 标题 | 备注 |",
-        "|--------|------|------|------|------|------|------|",
+        "| 序号 | 文件名 | 格式 | 页数 | 字数 | 作者 | 标题 | 备注 |",
+        "|------|--------|------|------|------|------|------|------|",
     ])
     for r in sorted(results, key=lambda x: x["filename"].lower()):
         author = r["author_from_meta"] or "—"
@@ -491,10 +655,21 @@ def generate_markdown_report(results: list, lit_dir: Path, skipped: list) -> str
             title = title[:37] + "..."
         if len(author) > 30:
             author = author[:27] + "..."
+        num = r.get("_citation_number", "")
         lines.append(
-            f"| {r['filename']} | {r['format']} | {r['pages']} | {r['word_count']} | "
+            f"| {num} | {r['filename']} | {r['format']} | {r['pages']} | {r['word_count']} | "
             f"{author} | {title} | {note} |"
         )
+    lines.append("")
+
+    # Citation list
+    lines.extend([
+        f"## 参考文献列表（{citation_style.upper()} 格式）\n",
+    ])
+    for r in sorted(results, key=lambda x: x.get("_citation_number", 0)):
+        citation = r.get("citation", "")
+        if citation:
+            lines.append(f"{r.get('_citation_number', '')}. {citation}")
     lines.append("")
 
     if skipped:
@@ -518,18 +693,41 @@ def generate_markdown_report(results: list, lit_dir: Path, skipped: list) -> str
 # ---------------------------------------------------------------------------
 
 def main():
+    args = sys.argv[1:]
+
     # Help
-    if len(sys.argv) == 2 and sys.argv[1] in ("-h", "--help"):
+    if any(a in args for a in ("-h", "--help")):
         print(__doc__)
         sys.exit(0)
 
-    # No args -> interactive prompt
-    if len(sys.argv) < 2:
+    # Parse optional flags
+    max_pages = 0
+    citation_style = "gb7714"
+    i = 0
+    while i < len(args):
+        if args[i] in ("--max-pages", "-m") and i + 1 < len(args):
+            try:
+                max_pages = int(args[i + 1])
+                if max_pages < 0:
+                    max_pages = 0
+            except ValueError:
+                pass
+            i += 2
+        elif args[i] in ("--citation-style", "-c") and i + 1 < len(args):
+            citation_style = args[i + 1].lower()
+            i += 2
+        else:
+            i += 1
+
+    # Determine folder path (first non-flag positional arg)
+    pos_args = [a for a in args if not a.startswith("-")]
+    if not pos_args:
         print("用法：python extract_literature_metadata.py <文献文件夹路径>")
+        print("  [--max-pages N] [--citation-style gb7714|apa|mla|numbered]")
         print("未提供路径，进入交互模式...")
         lit_dir = _prompt_path()
     else:
-        lit_dir = Path(sys.argv[1]).expanduser()
+        lit_dir = Path(pos_args[0]).expanduser()
         if not lit_dir.exists():
             print(f"路径不存在：{lit_dir}")
             print("进入交互模式...")
@@ -579,7 +777,7 @@ def main():
         print(f"使用 {max_workers} 线程并发处理...")
 
         def _extract_with_log(path: str) -> dict:
-            info = extract_info(path)
+            info = extract_info(path, max_pages=max_pages)
             print(f"  [DONE] {info['format']:5} P{info['pages']:3} WC{info['word_count']:6} | {info['filename'][:45]}")
             return info
 
@@ -600,27 +798,46 @@ def main():
                 break
     _save_cache(cache_path, new_cache)
 
+    # Duplicate detection
+    duplicates = _find_duplicates(results)
+    if duplicates:
+        print(f"\n  检测到 {len(duplicates)} 篇疑似重复文献")
+        for fname, dlist in duplicates.items():
+            print(f"    - {fname} ↔ {', '.join(dlist)}")
+
+    # Generate citations for each result
+    for idx, r in enumerate(results, start=1):
+        r["_citation_number"] = idx
+        r["citation"] = generate_citation(r, citation_style)
+
     # Console summary
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
     for r in results:
         status = "⚠️ SCANNED" if r["is_scanned"] else "  OK     "
+        dup_mark = " [DUP]" if r["filename"] in duplicates else ""
         note = f" | NOTE: {r['note']}" if r["note"] else ""
         print(
             f"[{status}] {r['format']:5} P{r['pages']:3} WC{r['word_count']:6} | "
-            f"{r['filename'][:45]}{note}"
+            f"{r['filename'][:45]}{dup_mark}{note}"
         )
 
     # JSON output
+    output_payload = {
+        "citation_style": citation_style,
+        "max_pages": max_pages,
+        "duplicates": duplicates,
+        "results": results,
+    }
     output_path = lit_dir / "_literature_extraction.json"
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+        json.dump(output_payload, f, ensure_ascii=False, indent=2)
     print(f"\nJSON 结果已保存：{output_path}")
 
     # Markdown report output
     md_path = lit_dir / "_literature_report.md"
-    md_content = generate_markdown_report(results, lit_dir, skipped)
+    md_content = generate_markdown_report(results, lit_dir, skipped, duplicates, citation_style)
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_content)
     print(f"Markdown 报告已保存：{md_path}")

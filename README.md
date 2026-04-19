@@ -96,7 +96,10 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 |------|------|------|
 | **并发提取** | `ThreadPoolExecutor(max_workers=4)` 多线程并行读取 | 30 篇文献提速约 2-3 倍 |
 | **增量缓存** | 基于文件 SHA-256 哈希，未变更文件跳过重新提取 | 二次运行秒级完成 |
+| **智能分页策略** | 短篇（≤50页）读全文，专著（>50页）采样前15+后5页 | 避免专著封面/目录误导扫描检测和字数统计 |
 | **多页采样扫描检测** | 采样 PDF 开头、中间、结尾页判断是否为扫描件 | 大幅降低封面图导致的误报 |
+| **重复文献检测** | 基于标题相似度（SequenceMatcher ≥80%）自动标记重复 | 避免同一文献多格式重复引用 |
+| **规范引用生成** | 支持 GB/T 7714、APA、MLA、编号四种格式自动生成 | 减少 Stage 4 引用格式不一致 |
 | **结构化异常记录** | 提取失败时记录错误类型到报告备注栏 | 不再静默失败 |
 
 ### 真实数据闭环
@@ -130,14 +133,18 @@ pip install PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4
 python extract_literature_metadata.py /path/to/your/literature/folder
 ```
 
+支持命令行参数：
+- `--max-pages N` / `-m N`：强制只读前 N 页（覆盖智能分页策略）
+- `--citation-style gb7714|apa|mla|numbered` / `-c STYLE`：选择引用格式（默认 gb7714）
+
 支持交互式使用：
 - 不带参数 → 提示输入路径
 - 路径不存在 → 提示重新输入
 - 无支持文件 → 列出检测到哪些、为什么不支持
 
 输出：
-- `_literature_extraction.json` — 结构化数据
-- `_literature_report.md` — 人可读汇总报告
+- `_literature_extraction.json` — 结构化数据（含 `duplicates`、`citation_style`、`results[].citation`）
+- `_literature_report.md` — 人可读汇总报告（含重复检测、参考文献列表附录）
 
 ... 支持 PDF / DOCX / TXT / MD / EPUB 多格式混合文件夹
 
@@ -168,7 +175,7 @@ efficient-literature-survey/
 ├── SKILL.md                              # Claude 读取的核心 skill 文档（仅 Claude Code 有效）
 ├── extract_literature_metadata.py        # 独立批量提取脚本（任何 Python 环境可用）
 ├── extract_pdf_metadata.py             # 旧版 PDF-only 脚本（保留向后兼容）
-├── test_extract_literature_metadata.py # 单元测试（24 个用例）
+├── test_extract_literature_metadata.py # 单元测试（52 个用例）
 ├── CHANGELOG.md                        # 版本变更日志
 ├── README.md                           # 中文版本（本文件）
 └── README_EN.md                        # English version
