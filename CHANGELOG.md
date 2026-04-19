@@ -26,6 +26,13 @@ All notable changes to this project will be documented in this file.
 - **Metadata fallback heuristics (`extract_meta_fallback_from_text`)**: When PDF `/Title` or `/Author` metadata is empty, the system now falls back to extracting title, author, and year from the first-page text using heuristic rules (title-length windowing, author-marker regexes, year extraction). Reduces "incomplete metadata" false positives significantly.
 - **Workflow checkpoint persistence (`checkpoint/manager.py`)**: After Stage 1 finishes, `_els_stage.json` is written to the output directory containing stage number, literature folder path, result count, and optional Stage 0 config. Enables Claude to resume multi-turn sessions without re-running extraction.
 - **Test coverage expanded**: Added `TestExtractMetaFallbackFromText` (6 cases) and `TestCheckpointManager` (4 cases). Total test count: 92+ → 103.
+- **Environment pre-check (`--env-check`)**: New CLI flag runs dependency validation, terminal encoding detection (Windows GBK trap), encrypted PDF preview, and scanned-PDF preview before extraction begins.
+- **Encrypted PDF detection**: `extractors/pdf.py` now detects `is_encrypted` via PyPDF2; attempts empty-password decrypt; surfaces encryption status in JSON/Markdown output.
+- **Windows encoding robustness**: `extract_literature_metadata.py` now forces UTF-8 on `sys.stdout`/`sys.stderr` via `TextIOWrapper` to prevent mojibake on GBK terminals.
+- **Fast Mode (Mode C)**: SKILL.md now supports a fast-path workflow where Stage 2 and Stage 3 checkpoints are merged when the user explicitly authorizes auto-advance (all 5 configs provided + "直接走").
+- **Output type configuration (Stage 0)**: New config item #6 (`thesis` / `review article`) controls how Rule 8 (critical analysis) is distributed — inline per cluster for reviews, or concentrated in a unified critique section for theses.
+- **Survey paper explicit flagging**: Rule 9 now mandates `〔综述〕` immediately after the first in-text citation of high-citation survey papers.
+- **Incremental result reuse**: SKILL.md Stage 1 now explicitly instructs: if `_literature_extraction.json` exists and files are unchanged (SHA-256 cache), skip re-extraction and proceed to Stage 2.
 
 ### Changed
 

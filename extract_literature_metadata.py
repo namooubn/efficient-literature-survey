@@ -12,6 +12,7 @@ Dependencies:
 """
 
 import argparse
+import importlib
 import json
 import logging
 import os
@@ -19,6 +20,14 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+
+# Fix Windows terminal encoding (GBK → UTF-8) to prevent mojibake in Chinese output
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except AttributeError:
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 # Ensure sub-package imports resolve when run as a standalone script
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -106,6 +115,83 @@ def _interactive_prompt_unsupported(skipped: list, supported_exts: set) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Environment pre-check
+# ---------------------------------------------------------------------------
+
+
+def run_env_check(lit_dir: Path | None = None) -> bool:
+    """Check dependencies, encoding, and preview problematic files.
+    Returns True if all critical checks pass, False otherwise.
+    """
+    print("=" * 60)
+    print("[环境预检] Efficient Literature Survey")
+    print("=" * 60)
+    all_ok = True
+
+    # 1. Dependency check
+    deps = {
+        "PyPDF2": "PyPDF2",
+        "pdfplumber": "pdfplumber",
+        "docx": "python-docx",
+        "ebooklib": "ebooklib",
+        "bs4": "beautifulsoup4",
+    }
+    missing = []
+    for mod, pkg in deps.items():
+        try:
+            importlib.import_module(mod)
+            print(f"  [OK] {pkg}")
+        except ImportError:
+            print(f"  [FAIL] {pkg} 未安装")
+            missing.append(pkg)
+    if missing:
+        print(f"\n  请运行: pip install {' '.join(missing)}")
+        all_ok = False
+
+    # 2. Encoding check (Windows GBK trap)
+    import locale
+    encoding = locale.getpreferredencoding(False)
+    print(f"\n  系统默认编码: {encoding}")
+    if encoding.lower() in ("gbk", "gb2312", "cp936"):
+        print("  [WARN] Windows 默认编码为 GBK，中文输出可能出现乱码")
+        print("  建议执行: chcp 65001  或  set PYTHONIOENCODING=utf-8")
+        # Not fatal; just warn
+
+    # 3. File preview (if folder provided)
+    if lit_dir and lit_dir.exists():
+        pdf_files = list(lit_dir.rglob("*.pdf")) if lit_dir.is_dir() else []
+        if pdf_files:
+            print(f"\n  扫描到 {len(pdf_files)} 个 PDF，预览前 5 个：")
+            from PyPDF2 import PdfReader
+            for p in pdf_files[:5]:
+                flag = ""
+                try:
+                    r = PdfReader(str(p))
+                    if getattr(r, "is_encrypted", False):
+                        flag = " [加密]"
+                    elif len(pdf_files) < 10 or not r.pages[0].extract_text():
+                        flag = " [可能为扫描件/图片PDF]"
+                except Exception as e:
+                    flag = f" [读取失败: {type(e).__name__}]"
+                print(f"    - {p.name}{flag}")
+            encrypted = 0
+            for p in pdf_files:
+                try:
+                    r = PdfReader(str(p))
+                    if getattr(r, "is_encrypted", False):
+                        encrypted += 1
+                except Exception:
+                    pass
+            if encrypted:
+                print(f"\n  [WARN] 检测到 {encrypted} 个加密 PDF，需手动解密")
+    else:
+        print("\n  未提供文献文件夹路径，跳过文件预览")
+
+    print("=" * 60)
+    return all_ok
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -148,10 +234,28 @@ def main():
         "--no-recursive", action="store_true",
         help="Disable recursive folder traversal",
     )
+    parser.add_argument(
+        "--env-check", "-e", action="store_true",
+        help="Run environment pre-check only (no extraction)",
+    )
 
     args = parser.parse_args()
 
     setup_logging(verbose=args.verbose, quiet=args.quiet)
+
+    # Resolve folder path early for env-check
+    lit_dir: Path | None = None
+    if args.folder:
+        lit_dir = Path(args.folder).expanduser()
+        if not lit_dir.exists():
+            lit_dir = None
+
+    if args.env_check:
+        ok = run_env_check(lit_dir)
+        sys.exit(0 if ok else 1)
+
+    # Always run a quick env check on first run
+    run_env_check(lit_dir)
 
     # Determine folder path
     if args.folder is None:

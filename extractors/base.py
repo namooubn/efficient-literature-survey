@@ -24,5 +24,6 @@ def make_result_template(file_path: str) -> dict:
         "issue": "",
         "page_range": "",
         "doi": "",
+        "is_encrypted": False,
         "note": "",
     }

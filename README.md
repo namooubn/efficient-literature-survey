@@ -22,7 +22,7 @@
   </tr>
   <tr>
     <td><b>0. 配置</b></td>
-    <td>确认语言、引用格式、章节结构、<b>研究定位</b>（题目/摘要/关键词均可）、<b>文献文件夹路径</b></td>
+    <td>确认语言、引用格式、章节结构、<b>研究定位</b>（题目/摘要/关键词均可）、<b>文献文件夹路径</b>、输出类型（学位论文/综述论文）</td>
     <td>配置清单 + 研究方向记录</td>
   </tr>
   <tr>
@@ -84,7 +84,7 @@ pip install -r requirements.txt
 
 | 格式 | 元数据提取 | pages | word_count | 期刊/卷期页/DOI | 扫描检测 | 依赖 |
 |------|-----------|-------|-----------|----------------|---------|------|
-| **PDF** | 标题、作者、页数、字数、期刊、卷期页、DOI | ✅ 真实页数 | ✅ 中英文混合智能统计 | ✅ 首页正则探测 | ✅ 多页采样 | PyPDF2 + pdfplumber |
+| **PDF** | 标题、作者、页数、字数、期刊、卷期页、DOI、加密检测 | ✅ 真实页数 | ✅ 中英文混合智能统计 | ✅ 首页正则探测 | ✅ 多页采样 | PyPDF2 + PyCryptodome + pdfplumber |
 | **DOCX** | 标题、作者、字数、期刊、卷期页 | ✅ 估算（字数÷500） | ✅ 中英文混合智能统计 | ✅ 前5000字符探测 | ❌ 否 | python-docx |
 | **TXT / MD** | 字数、期刊、卷期页 | ✅ 估算 | ✅ 中英文混合智能统计 | ✅ 前3000字符探测 | ❌ 否 | 内置 |
 | **EPUB** | 标题、作者、字数、期刊、卷期页 | ✅ 估算 | ✅ 中英文混合智能统计 | ✅ 前3000字符探测 | ❌ 否 | ebooklib + beautifulsoup4 |
@@ -94,6 +94,7 @@ pip install -r requirements.txt
 
 | 特性 | 说明 | 效果 |
 |------|------|------|
+| **环境预检** | `--env-check` 检测依赖完整性、终端编码、加密 PDF、扫描件 | 避免运行时批量失败 |
 | **并发提取** | `ThreadPoolExecutor(max_workers=4)` 多线程并行读取 | 30 篇文献提速约 2-3 倍 |
 | **增量缓存** | 基于文件 SHA-256 哈希，未变更文件跳过重新提取 | 二次运行秒级完成 |
 | **智能分页策略** | 短篇（≤50页）读全文，专著（>50页）采样前15+后5页 | 避免专著封面/目录误导扫描检测和字数统计 |
@@ -132,6 +133,8 @@ cp -r efficient-literature-survey ~/.claude/skills/
 pip install -r requirements.txt
 ```
 
+> **Windows 用户注意**：如果终端默认编码为 GBK，运行前请先执行 `chcp 65001` 或 `set PYTHONIOENCODING=utf-8`，避免中文输出乱码。
+
 ### 使用方式
 
 **方式一：独立脚本**
@@ -141,6 +144,7 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 ```
 
 支持命令行参数：
+- `--env-check` / `-e`：运行环境预检（依赖/编码/加密PDF/扫描件），不执行提取
 - `--max-pages N` / `-m N`：强制只读前 N 页（覆盖智能分页策略）
 - `--citation-style gb7714|apa|mla|numbered` / `-c STYLE`：选择引用格式（默认 gb7714）
 - `--output-dir PATH` / `-o PATH`：指定输出目录（默认在文献文件夹内创建 `.els_output/` 子目录）

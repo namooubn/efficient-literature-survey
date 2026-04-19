@@ -24,6 +24,11 @@ description: Use when the user needs to batch-read academic literature (10+ file
 
 - **Mode A (default)**: Run Stage 1 script immediately → show results table → collect remaining Stage 0 configs.
 - **Mode B**: If user proactively gives all 5 configs, skip straight to Stage 1.
+- **Mode C (Fast Mode)**: Triggered ONLY when (a) all 5 configs are provided, AND (b) user explicitly says "直接走 / 全速推进 / 不用确认". In this mode:
+  - Stage 1 results are shown; if user does not object, auto-advance to Stage 2.
+  - Stage 2 cluster map is shown; auto-advance to Stage 3 (merged checkpoint).
+  - Stage 3 reading summary is shown; MUST pause for user confirmation before Stage 4.
+  - Stage 0 and Stage 2 checkpoints remain; Stage 2→3 checkpoints are merged into one "map + plan" summary.
 
 ## Stage 0: User Configuration (REQUIRED — hold here until all 5 collected)
 
@@ -34,21 +39,44 @@ description: Use when the user needs to batch-read academic literature (10+ file
 | 3 | Chapter structure | "Custom headings or default template (Chinese/English thesis)?" |
 | 4 | Research positioning | "Thesis title, abstract, research question, OR 3-5 keywords — any is fine." |
 | 5 | Literature folder path | "Where are your files?" |
+| 6 | Output type | "thesis (学位论文) / review article (综述论文) / other?" (default: thesis) |
 
 **Rule**: Do NOT proceed to Stage 4 until all 5 are collected. If custom structure chosen but not yet provided, hold at Stage 0.
 
 ## Stage 1: Batch Extract Metadata
 
+### Step 0: Environment Pre-Check (REQUIRED)
+
+Before running extraction, verify the environment to avoid runtime failures:
+
+```bash
+python extract_literature_metadata.py <folder_path> --env-check
+```
+
+This checks:
+- Dependencies installed (`PyPDF2`, `pdfplumber`, `python-docx`, etc.)
+- Terminal encoding (Windows GBK → UTF-8 warning)
+- Encrypted PDFs, scanned-image PDFs, CAJ files
+
+**If missing deps**: `pip install PyPDF2 PyCryptodome pdfplumber python-docx ebooklib beautifulsoup4`
+**If Windows GBK**: run `chcp 65001` or `set PYTHONIOENCODING=utf-8`
+**If encrypted PDFs detected**: user must decrypt before proceeding.
+
+### Step 1: Run Extraction
+
 Run `extract_literature_metadata.py <folder_path>` to extract:
 - Title, author, year, page count, word count
 - Journal/volume/issue/page-range/DOI (heuristic detection)
-- Scanned-image flag, first-page preview text
+- Scanned-image flag, encrypted flag, first-page preview text
 - Duplicate detection
 
 **Output**: `_literature_extraction.json` + `_literature_report.md` + optional `_literature_references.bib`.
 
+**Incremental re-use**: If `_literature_extraction.json` already exists in the output folder and files are unchanged (SHA-256 cache), skip re-extraction and proceed to Stage 2. Do NOT force re-running Stage 1 unless user explicitly requests it.
+
 **Decision points**:
-- Scanned PDF → warn user; suggest `marker` / `nougat` / `tesseract` OCR.
+- Scanned/image PDF → warn user; suggest `marker` / `nougat` / `tesseract` OCR.
+- Encrypted PDF → flag `is_encrypted`; user must decrypt.
 - CAJ detected → instruct conversion to PDF.
 - >40 refs → batch by subfolder or cluster.
 
@@ -95,6 +123,8 @@ Score each cluster using the user's Stage 0 research positioning keywords as exp
 
 **[USER_CHECKPOINT]**: Present reading plan (which P0/P1/P2, at what depth). WAIT for confirmation.
 
+**Fast Mode exception (Mode C)**: If user already confirmed the Stage 2 cluster map with "直接走", merge this checkpoint into Stage 2's summary. Present the reading plan as part of the cluster map output, then auto-advance.
+
 ### P0 (Core) — 5-8 refs
 1. Read first 2,000 chars for structure.
 2. If ≤50,000 chars → full text.
@@ -130,9 +160,12 @@ Write introduction and literature review per user's Stage 0 chapter structure. *
 4. **Every claim must be traceable** to a specific reference.
 5. **Research gap**: Final section MUST explicitly name the gap and state how user's study fills it.
 6. **Output language**: Strictly follow Stage 0 config.
-7. **Temporal evolution (NEW)**: Within each cluster, organize references chronologically or by theoretical lineage. Show: early work → turning points → recent advances.
-8. **Critical analysis (NEW)**: In each cluster, identify at least ONE conflict, methodological limitation, or contradictory finding among cited refs. Explain how user's study addresses or avoids it.
-9. **Survey vs. original distinction**: High-citation survey papers in a cluster must be flagged as `〔综述〕` and used as theoretical anchors; original experimental papers support specific claims.
+7. **Temporal evolution**: Within each cluster, organize references chronologically or by theoretical lineage. Show: early work → turning points → recent advances.
+8. **Critical analysis** (branch by output_type):
+   - **review article**: In EACH cluster paragraph, inline at least ONE conflict, methodological limitation, or contradictory finding. Place critique within the cluster's narrative flow.
+   - **thesis (default)**: Critique MAY be concentrated in a dedicated "文献评述 / Literature Critique" section (typically after all cluster subsections). Each cluster paragraph focuses on chronological evolution and thematic synthesis. The unified critique section identifies cross-cluster gaps, methodological limitations, and contradictory findings across the field. Brief inline critique per cluster is optional.
+   - **Mixed**: Brief inline critique per cluster + a unified critique section for cross-cutting gaps.
+9. **Survey vs. original distinction**: High-citation survey papers MUST be explicitly flagged with `〔综述〕` immediately after the first in-text citation. Example: "郭小宇等〔综述〕对 X 领域进行了系统梳理……". Original experimental papers carry no flag.
 
 ### Few-Shot: Writing a Cluster Paragraph
 
@@ -140,6 +173,11 @@ Write introduction and literature review per user's Stage 0 chapter structure. *
 
 **Good example** (follows rules 7+8):
 > Early efforts to elicit reasoning from LLMs relied on few-shot exemplars without explicit intermediate steps (Brown et al., 2020). The breakthrough came with chain-of-thought (CoT) prompting, which demonstrated that inserting reasoning chains into prompts significantly improves arithmetic and commonsense reasoning (Wei et al., 2022). However, subsequent work revealed a critical tension: while CoT improves performance on complex tasks, it can amplify biases present in the training data (Turpin et al., 2023), and its effectiveness diminishes sharply in low-resource languages (Shi et al., 2022). These conflicting findings highlight the need for bias-aware CoT mechanisms — the gap this study addresses by proposing [your method].
+
+**Good example — thesis style** (chronological synthesis, critique deferred to unified section):
+> 早期研究通过少量示例激发 LLM 推理能力，但未显式构建中间步骤 (Brown et al., 2020)。Wei 等 (2022) 提出思维链 (CoT) 提示，在算术与常识推理任务上取得突破。此后，零样本 CoT (Kojima et al., 2022) 与自一致性解码 (Wang et al., 2023) 进一步扩展了该范式。郭小宇等〔综述〕系统梳理了 CoT 在复杂推理中的应用现状。上述研究共同推动了从"直接预测"到"逐步推理"的范式转变，为本研究提出的偏差感知 CoT 机制奠定了理论基础。
+>
+> （文献评述节统一批判：然而，现有 CoT 方法存在两方面局限：一是可能放大训练数据中的固有偏见 (Turpin et al., 2023)；二是在低资源语言中效果显著下降 (Shi et al., 2022)。这些矛盾发现表明，亟需构建兼顾公平性与跨语言泛化能力的 CoT 框架——这正是本研究的切入点。）
 
 **Bad example** (violates rules 7+8 — flat listing, no conflict):
 > Wei et al. (2022) proposed chain-of-thought prompting. Kojima et al. (2022) used zero-shot CoT. Wang et al. (2023) improved it with self-consistency. These methods all improve reasoning.
@@ -159,6 +197,10 @@ When user says "add more papers" or "I found 5 new refs":
 
 ### Bash — Run extraction script
 ```bash
+# Environment pre-check (run first)
+python extract_literature_metadata.py <folder_path> --env-check
+
+# Full extraction
 python extract_literature_metadata.py <folder_path> [--max-pages N] [--citation-style STYLE] [--output-dir PATH] [--bibtex] [--no-recursive]
 ```
 
@@ -179,13 +221,16 @@ python extract_literature_metadata.py <folder_path> [--max-pages N] [--citation-
 |-----------|--------|
 | 30+ files in folder | Run Stage 1 immediately (Mode A) |
 | Scanned/image PDF | Flag; suggest OCR tools |
+| Encrypted PDF | Flag `is_encrypted`; user must decrypt |
 | Monograph >200 pages | Extract TOC; read 2-3 relevant chapters only |
 | No chapter structure | Hold at Stage 0; do not guess |
 | No research positioning | Hold at Stage 0; do not cluster blindly |
 | Weak reference | Exclude; note as "tangential" in map |
 | User wants "save tokens" | Emphasize P0/P1/P2 tier system |
+| User says "直接走/全速推进" | Enable **Mode C (Fast Mode)** |
 | CAJ files | Instruct conversion to PDF |
 | Adding new refs mid-workflow | Use **Append Mode** |
+| `_literature_extraction.json` exists | Skip Stage 1; proceed to Stage 2 |
 
 ## Common Mistakes
 
@@ -196,15 +241,17 @@ python extract_literature_metadata.py <folder_path> [--max-pages N] [--citation-
 - **Ignoring weak refs** — Tangential refs must be flagged and potentially excluded.
 - **Skipping gap analysis** — Stage 4 MUST end with gap + positioning.
 - **Skipping Stage 0** — Writing without all 5 configs guarantees mismatch.
-- **Auto-advancing** — Each `[USER_CHECKPOINT]` exists for a reason. Do NOT silently proceed.
+- **Auto-advancing** — Each `[USER_CHECKPOINT]` exists for a reason. Do NOT silently proceed (except in Mode C with explicit user consent).
 - **Flat chronological listing** — Violates Rule 7. Must show evolution, not just sequence.
 - **No critical tension** — Violates Rule 8. A review without critique is a bibliography, not scholarship.
+- **不分输出类型硬套批判规则** — thesis 和 review article 的批判分布不同，生搬硬套会破坏行文流畅度。
+- **忽略环境差异** — Windows GBK 编码、加密 PDF、缺失依赖会导致 Stage 1 批量失败。必须先做环境预检。
 
 ## Reusable Tool
 
 **`extract_literature_metadata.py`** — Batch-extracts titles, authors, page/word counts, text volume, scanned-page detection, bibliographic metadata (journal/vol/issue/DOI), duplicate detection, and formatted citations. Outputs JSON + Markdown + optional BibTeX.
 
-**Dependencies**: `PyPDF2 pdfplumber python-docx ebooklib beautifulsoup4`
+**Dependencies**: `PyPDF2 PyCryptodome pdfplumber python-docx ebooklib beautifulsoup4`
 
 ## Real-World Impact
 

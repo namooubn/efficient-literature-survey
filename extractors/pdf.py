@@ -39,6 +39,18 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
     try:
         reader = PdfReader(pdf_path)
         result["pages"] = len(reader.pages)
+
+        # Check encryption
+        if getattr(reader, "is_encrypted", False):
+            result["is_encrypted"] = True
+            try:
+                reader.decrypt("")
+                result["note"] += "PDF is encrypted; attempted decrypt with empty password. "
+            except Exception:
+                result["note"] += "PDF is encrypted and cannot be decrypted automatically. "
+                result["is_scanned"] = False
+                return result
+
         meta = reader.metadata
         if meta:
             result["author_from_meta"] = str(meta.get("/Author", ""))
@@ -67,6 +79,9 @@ def extract_pdf(pdf_path: str, max_pages: int = 0) -> dict:
         if not result["note"]:
             result["note"] = ""
         result["note"] += f"PyPDF2 error: {type(e).__name__}: {e}; "
+        # If PyPDF2 completely fails, zero out pages so fallback can try
+        if result["pages"] == 0:
+            result["pages"] = 0
 
     # Fallback to pdfplumber if PyPDF2 extracted very little text
     if result["text_chars"] < PDF_FALLBACK_TEXT_CHARS and result["pages"] > 0 and pdfplumber is not None:

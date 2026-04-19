@@ -18,7 +18,7 @@ Supports **custom chapter structures** or **default templates** (Chinese / Engli
   </tr>
   <tr>
     <td><b>0. Config</b></td>
-    <td>Confirm language, citation format, chapter structure, <b>research positioning</b> (title/abstract/keywords — any is fine), <b>literature folder path</b></td>
+    <td>Confirm language, citation format, chapter structure, <b>research positioning</b> (title/abstract/keywords — any is fine), <b>literature folder path</b>, output type (thesis / review article)</td>
     <td>Config checklist + user study positioning</td>
   </tr>
   <tr>
@@ -80,7 +80,7 @@ pip install -r requirements.txt
 
 | Format | Metadata Extracted | pages | word_count | Journal/Vol/Issue/Pages/DOI | Scan Detection | Dependencies |
 |--------|-------------------|-------|-----------|---------------------------|----------------|--------------|
-| **PDF** | Title, author, pages, word count, journal, vol/issue/pages, DOI | ✅ Real page count | ✅ Smart CJK/English mixed counting | ✅ First-page regex heuristics | ✅ Multi-page sampling | PyPDF2 + pdfplumber |
+| **PDF** | Title, author, pages, word count, journal, vol/issue/pages, DOI, encryption detection | ✅ Real page count | ✅ Smart CJK/English mixed counting | ✅ First-page regex heuristics | ✅ Multi-page sampling | PyPDF2 + PyCryptodome + pdfplumber |
 | **DOCX** | Title, author, word count, journal, vol/issue | ✅ Estimated (chars÷500) | ✅ Smart CJK/English mixed counting | ✅ First 5000 chars heuristics | ❌ No | python-docx |
 | **TXT / MD** | Word count, journal, vol/issue | ✅ Estimated | ✅ Smart CJK/English mixed counting | ✅ First 3000 chars heuristics | ❌ No | Built-in |
 | **EPUB** | Title, author, word count, journal, vol/issue | ✅ Estimated | ✅ Smart CJK/English mixed counting | ✅ First 3000 chars heuristics | ❌ No | ebooklib + beautifulsoup4 |
@@ -90,6 +90,7 @@ pip install -r requirements.txt
 
 | Feature | Description | Impact |
 |---------|-------------|--------|
+| **Environment pre-check** | `--env-check` detects missing deps, terminal encoding, encrypted PDFs, scanned PDFs | Prevents batch runtime failures |
 | **Concurrent extraction** | `ThreadPoolExecutor(max_workers=4)` parallelizes file I/O | ~2-3x faster for 30+ files |
 | **Incremental caching** | SHA-256 file hashing skips unchanged files on re-runs | Subsequent runs complete in seconds |
 | **Smart page-reading strategy** | Short docs (≤50 pages) read fully; monographs (>50 pages) sample first 15 + last 5 | Avoids front-matter bias on monographs for scan detection and word counts |
@@ -135,6 +136,7 @@ python extract_literature_metadata.py /path/to/your/literature/folder
 ```
 
 CLI flags:
+- `--env-check` / `-e`: Run environment pre-check (deps / encoding / encrypted PDFs / scanned PDFs) without extraction
 - `--max-pages N` / `-m N`: Force read only the first N pages (overrides smart paging)
 - `--citation-style gb7714|apa|mla|numbered` / `-c STYLE`: Choose citation format (default: gb7714)
 - `--output-dir PATH` / `-o PATH`: Specify output directory (default: `.els_output/` subfolder inside the literature folder)
