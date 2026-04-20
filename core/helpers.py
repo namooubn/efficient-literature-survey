@@ -106,6 +106,18 @@ def extract_meta_fallback_from_text(text: str) -> dict:
             result["author"] = m.group(1).strip()
             break
 
+    # Additional Chinese author patterns
+    if not result["author"]:
+        # Pattern: Chinese names separated by 、，, on a single line
+        cn_author_match = re.search(
+            r"(?:^|\n)\s*([\u4e00-\u9fff]{2,4}(?:[，,、][\u4e00-\u9fff]{2,4})+)\s*(?:\n|$)",
+            text,
+        )
+        if cn_author_match:
+            result["author"] = (
+                cn_author_match.group(1).replace("，", "、").replace(",", "、")
+            )
+
     # Filter known garbage author values from fallback extraction
     if result["author"].lower() in (
         "how to cite this article",
@@ -223,6 +235,7 @@ def extract_bib_info_from_text(text: str) -> dict:
     """
     Attempt to extract journal/publisher/volume/issue/pages/year/DOI from
     the first page / front matter text using heuristic regexes.
+    Enhanced for both Chinese and English academic papers.
     """
     info = {
         "journal": "",
@@ -254,31 +267,84 @@ def extract_bib_info_from_text(text: str) -> dict:
             info["issue"] = vol_match.group(2)
 
     # Pages – English patterns: pp. 123-145, p. 123, 123–145
+    # BUT filter out ISSN-like 4-digit-4-digit patterns (e.g. 1674-6708)
     page_match = re.search(r"(?:pp?\.?\s*)?(\d+)[\s–—-]+(\d+)", text)
     if page_match:
-        info["page_range"] = f"{page_match.group(1)}-{page_match.group(2)}"
+        start_p, end_p = int(page_match.group(1)), int(page_match.group(2))
+        # ISSN heuristic: both parts are 4 digits and start >= 1000
+        if not (len(page_match.group(1)) == 4 and len(page_match.group(2)) == 4 and start_p >= 1000):
+            # Additional sanity: end should be > start (or close)
+            if end_p >= start_p or start_p - end_p < 10:
+                info["page_range"] = f"{page_match.group(1)}-{page_match.group(2)}"
 
-    # Volume / Issue / Pages – Chinese patterns
-    cn_vol = re.search(r"第\s*(\d+)\s*卷", text)
-    cn_issue = re.search(r"第\s*(\d+)\s*期", text)
-    cn_page = re.search(r"第\s*(\d+)\s*[—–~\-]\s*(\d+)\s*页", text)
-    if cn_vol:
-        info["volume"] = cn_vol.group(1)
-    if cn_issue:
-        info["issue"] = cn_issue.group(1)
-    if cn_page:
-        info["page_range"] = f"{cn_page.group(1)}-{cn_page.group(2)}"
+    # Volume / Issue – Chinese patterns (expanded)
+    cn_vol_patterns = [
+        r"第\s*(\d+)\s*卷",
+        r"(\d+)\s*卷",
+        r"(\d+)\s*卷\s*第\s*(\d+)\s*期",
+        r"第\s*(\d+)\s*卷\s*(\d+)\s*期",
+        r"(\d+)\s*卷\s*(\d+)\s*期",
+    ]
+    for pat in cn_vol_patterns:
+        m = re.search(pat, text)
+        if m:
+            if not info["volume"]:
+                info["volume"] = m.group(1)
+            if not info["issue"] and len(m.groups()) >= 2 and m.group(2):
+                info["issue"] = m.group(2)
+            break
 
-    # Journal / Publisher heuristics
-    cn_journal = re.search(r"《([^》]{3,50})》", text)
-    if cn_journal:
-        info["journal"] = cn_journal.group(1).strip()
+    cn_issue_patterns = [
+        r"第\s*(\d+)\s*期",
+        r"(\d+)\s*期",
+    ]
+    for pat in cn_issue_patterns:
+        m = re.search(pat, text)
+        if m and not info["issue"]:
+            info["issue"] = m.group(1)
+            break
+
+    # Pages – Chinese patterns (expanded)
+    cn_page_patterns = [
+        r"第\s*(\d+)\s*[—–~\-]\s*(\d+)\s*页",
+        r"(\d+)\s*[—–~\-]\s*(\d+)\s*页",
+        r"页码[：:]?\s*(\d+)\s*[-—~]\s*(\d+)",
+        r"[\(\（]\s*(\d+)\s*[-—~]\s*(\d+)\s*[\)\）]",
+    ]
+    for pat in cn_page_patterns:
+        m = re.search(pat, text)
+        if m and not info["page_range"]:
+            info["page_range"] = f"{m.group(1)}-{m.group(2)}"
+            break
+
+    # Journal / Publisher heuristics (expanded)
+    cn_journal_patterns = [
+        r"《([^》]{3,50})》",
+        r"(?:刊名|期刊)[：:\s]+([^\n]{3,50})",
+        r"(?:发表于|刊载于|载于)[《\s]*([^》\n]{3,50})[》\s]*",
+    ]
+    for pat in cn_journal_patterns:
+        m = re.search(pat, text)
+        if m and not info["journal"]:
+            info["journal"] = m.group(1).strip()
+            break
 
     for line in text.splitlines()[:BIB_TEXT_SCAN_LINES]:
         line = line.strip()
         if 10 < len(line) < 80 and line.isupper() and line.replace(" ", "").isalpha():
             if not info["journal"]:
                 info["journal"] = line.title()
+            break
+
+    # Publisher heuristics
+    publisher_patterns = [
+        r"(?:出版社|出版机构)[：:\s]+([^\n]{3,50})",
+        r"(?:Publisher)[：:\s]+([^\n]{3,50})",
+    ]
+    for pat in publisher_patterns:
+        m = re.search(pat, text)
+        if m and not info["publisher"]:
+            info["publisher"] = m.group(1).strip()
             break
 
     return info
@@ -382,6 +448,10 @@ def extract_toc_from_pdf(pdf, total_pages: int) -> list[dict]:
         r"第[\s]*([一二三四五六七八九十\d]+)[\s]*章[\s]+(.+?)[\s.]+(\d+)",
         # Chinese alt: "一、绪论 .... 23"
         r"([一二三四五六七八九十][、\.\s]+.+?)[\s.]+(\d+)",
+        # Numbered: "1. Introduction .... 23" or "1 Introduction ... 23"
+        r"(?:^|\n)\s*(\d+(?:\.\d+)?)[\.\s]+([^\n]{3,80}?)[\s.]+(\d+)(?:\s*$|\s*\n)",
+        # Chinese section: "第1节 标题...23" or "第一节 标题...23"
+        r"第[\s]*([一二三四五六七八九十\d]+)[\s]*节[\s]+(.+?)[\s.]+(\d+)",
         # Simple: "Introduction .................... 23"
         r"([A-Za-z\u4e00-\u9fff][A-Za-z\s\u4e00-\u9fff]+)[\s.]+(\d+)",
     ]
@@ -408,32 +478,68 @@ def extract_toc_from_pdf(pdf, total_pages: int) -> list[dict]:
         except Exception:
             continue
 
-    # Filter noise: skip very short or very long chapter names
+    # Filter noise
     MIN_CHAPTER_LEN = 3
     MAX_CHAPTER_LEN = 120
-    toc = [
-        e for e in toc
-        if MIN_CHAPTER_LEN <= len(e["chapter"].strip()) <= MAX_CHAPTER_LEN
-    ]
+    NOISE_KEYWORDS = (
+        "list of", "preface", "foreword", "acknowledgement", "acknowledgment",
+        "contents", "copyright", "isbn", "printed in", "published by",
+        "typeset in", "all rights reserved", "digitized by", "library",
+        "cambridge", "polity press", "blackwell", "oxford", "harvard",
+        "university of", "department of", "www.", "@126.com",
+        "figure", "table", "box", "appendix", "notes", "index", "references",
+        "bibliography", "epilogue", "introduction", "conclusion",
+    )
+
+    filtered: list[dict] = []
+    for e in toc:
+        ch = e["chapter"].strip()
+        if not (MIN_CHAPTER_LEN <= len(ch) <= MAX_CHAPTER_LEN):
+            continue
+        ch_lower = ch.lower()
+        if any(nk in ch_lower for nk in NOISE_KEYWORDS):
+            continue
+        # Skip entries that look like sentences (too many words without chapter marker)
+        words = ch.split()
+        if len(words) > 12 and not re.search(r"(?:chapter|ch\.?|第[\d一二三四五六七八九十]+章|part|section)", ch, re.I):
+            continue
+        filtered.append(e)
 
     # Deduplicate by chapter name and sort by page_start
     seen: set[str] = set()
     deduped: list[dict] = []
-    for entry in toc:
-        key = entry["chapter"]
+    for entry in filtered:
+        key = entry["chapter"].strip().lower()
         if key not in seen:
             seen.add(key)
             deduped.append(entry)
     deduped.sort(key=lambda x: x["page_start"])
 
-    # Fill in page_end from next entry
-    for i in range(len(deduped)):
-        if i + 1 < len(deduped):
-            deduped[i]["page_end"] = deduped[i + 1]["page_start"] - 1
+    # Merge entries with same or very close page_start (keep the longer/cleaner one)
+    merged: list[dict] = []
+    for entry in deduped:
+        if not merged:
+            merged.append(entry)
+            continue
+        last = merged[-1]
+        if entry["page_start"] == last["page_start"] or entry["page_start"] <= last["page_start"] + 1:
+            # Same page — keep the shorter/cleaner chapter name (more likely to be real title)
+            if len(entry["chapter"]) < len(last["chapter"]):
+                merged[-1] = entry
         else:
-            deduped[i]["page_end"] = total_pages
+            merged.append(entry)
 
-    return deduped
+    # Fill in page_end from next entry
+    for i in range(len(merged)):
+        if i + 1 < len(merged):
+            merged[i]["page_end"] = merged[i + 1]["page_start"] - 1
+        else:
+            merged[i]["page_end"] = total_pages
+        # Sanity: page_end must be >= page_start
+        if merged[i]["page_end"] < merged[i]["page_start"]:
+            merged[i]["page_end"] = merged[i]["page_start"]
+
+    return merged
 
 
 def match_chapters_by_keywords(toc: list[dict], keywords: str) -> list[dict]:
@@ -460,6 +566,25 @@ def match_chapters_by_keywords(toc: list[dict], keywords: str) -> list[dict]:
                     matched.append(entry)
                 break
     return matched
+
+
+def extract_chapter_text(pdf, chapter: dict, max_chars: int = 8000) -> str:
+    """
+    Extract text from a chapter's page range using a pdfplumber PDF object.
+    Returns up to max_chars of text (default 8k for context budget).
+    """
+    start = chapter.get("page_start", 1) - 1  # 0-based
+    end = chapter.get("page_end", start + 1)
+    texts: list[str] = []
+    for i in range(start, min(end, len(pdf.pages))):
+        try:
+            txt = pdf.pages[i].extract_text() or ""
+            if txt.strip():
+                texts.append(txt)
+        except Exception:
+            continue
+    full_text = "\n".join(texts)
+    return full_text[:max_chars]
 
 
 # ---------------------------------------------------------------------------
@@ -505,9 +630,12 @@ def extract_meta_fallback_from_text_enhanced(
                         and max_size - float(w["size"]) <= PDFPLUMBER_FONT_DIFF_THRESHOLD
                     ]
                     candidate = " ".join(title_words).strip()
+                    cn_chars = len(re.findall(r"[\u4e00-\u9fff]", candidate))
+                    cn_ratio = cn_chars / len(candidate) if candidate else 0
                     if (
                         META_TITLE_MIN_LEN <= len(candidate.replace(" ", ""))
                         <= META_TITLE_MAX_LEN
+                        and (cn_ratio >= 0.3 or re.search(r"[a-zA-Z]", candidate))
                     ):
                         result["title"] = candidate
         except Exception:

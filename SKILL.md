@@ -27,13 +27,15 @@ description: Use when the user needs to batch-read academic literature (10+ file
 - **Mode C (Fast Mode)**: Triggered ONLY when (a) all 5 configs are provided, AND (b) user explicitly says "直接走 / 全速推进 / 不用确认". In this mode:
   - Stage 1 results are shown; if user does not object, auto-advance to Stage 2.
   - Stage 2 cluster map is shown; auto-advance to Stage 3 (merged checkpoint).
-  - Stage 3 reading summary is shown; MUST pause for user confirmation before Stage 4.
+  - Stage 3 reading summary is shown; MUST pause for user confirmation before Stage 3.5.
+  - Stage 3.5 outline is shown; MUST pause for user confirmation before Stage 4.
   - Stage 0 and Stage 2 checkpoints remain; Stage 2→3 checkpoints are merged into one "map + plan" summary.
 - **Mode D (Semi-Fast Mode)**: Triggered when (a) all 5 configs are provided, AND (b) user does NOT explicitly say "逐阶段确认". In this mode:
   - Stage 1 results are shown; auto-advance to Stage 2.
   - Stage 2 cluster map + reading plan are merged into ONE output; MUST pause for user confirmation before Stage 3.
-  - Stage 3 reading summary is shown; MUST pause for user confirmation before Stage 4.
-  - **Critical rule**: Even in Mode D, the agent MUST NOT proceed from Stage 2→3 without explicit user confirmation of the cluster map + reading plan. This is the single non-negotiable checkpoint.
+  - Stage 3 reading summary is shown; MUST pause for user confirmation before Stage 3.5.
+  - Stage 3.5 outline is shown; MUST pause for user confirmation before Stage 4.
+  - **Critical rule**: Even in Mode D, the agent MUST NOT proceed from Stage 2→3 or Stage 3.5→4 without explicit user confirmation. These are non-negotiable checkpoints.
 
 ## Stage 0: User Configuration (REQUIRED — hold here until all 5 collected)
 
@@ -155,6 +157,54 @@ Score each cluster using the user's Stage 0 research positioning keywords as exp
 **[CONTEXT_OVERFLOW] guard**: Combined P0+P1 >100k words → downgrade all P1 to abstract-only; keep top 5 P0 only.
 
 **[USER_CHECKPOINT]**: After Stage 3, present brief reading summary. WAIT before Stage 4.
+
+## Stage 3.5: Outline Confirmation (MANDATORY)
+
+**Purpose**: Prevent high rework cost if user wants structural changes after 6,800+ words are written. The user said "我不着急 一步步来" — this stage honors that intent.
+
+**Input**: Stage 3 reading summaries + Stage 0 chapter structure + monograph chapter mappings (if any).
+
+**Output**: A bullet-point level outline with:
+- Section headings (matching user's Stage 0 structure exactly)
+- Core argument per section (1-2 sentences)
+- Citation numbers planned for each section
+- Estimated word count per section
+- Monograph chapter-to-section mappings (e.g. "专著《X》第3章 → 本节理论框架")
+
+**Format**:
+
+```markdown
+## 写作大纲（待确认）
+
+### 1. 研究背景与问题提出（约 800 字）
+- 论点：XXX 领域的发展引出 YYY 核心问题
+- 引用：[1], [3], [5]
+
+### 2. 文献综述 — 子主题 A（约 1200 字）
+- 论点：早期研究侧重... 近期突破在于...
+- 引用：[2], [4], [7]
+- 专著映射：专著《X》第3章"理论框架" → 本节理论基础
+
+...
+
+### N. 研究缺口与本研究定位（约 600 字）
+- 论点：现有研究存在三方面局限 → 本研究的切入点
+- 引用：[6], [8]
+
+**预估总字数**：6800 字
+```
+
+**Rules**:
+1. Do NOT write full prose in this stage — only bullet points.
+2. Every planned citation MUST map to a real reference from Stage 1 results.
+3. If user provided custom chapter structure in Stage 0, use it exactly; do not invent new headings.
+4. For monographs with `chapter_texts`, note which chapters feed which sections.
+
+**Mode C/D exception**: Even in Fast / Semi-Fast modes, Stage 3.5 is **NON-SKIPPABLE**. Auto-advance is NOT permitted here. The merged checkpoint from Stage 2→3 MUST end at Stage 3.5, not Stage 4.
+
+**[USER_CHECKPOINT]**: Present outline. WAIT for explicit confirmation or revision request.
+- If user says "确认 / 可以 / 没问题 / 就这么写" → proceed to Stage 4.
+- If user requests changes → revise outline and re-present. Do NOT proceed to Stage 4 until user confirms.
 
 ## Stage 4: Structured Writing
 

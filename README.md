@@ -41,6 +41,11 @@
     <td>提取的论点与可引用原文</td>
   </tr>
   <tr>
+    <td><b>3.5 大纲确认</b></td>
+    <td>根据阅读摘要生成 bullet-point 级别写作大纲（论点、引用编号、预估字数、专著映射）—— <b>用户确认后方可进入 Stage 4</b></td>
+    <td>结构化大纲（待确认）</td>
+  </tr>
+  <tr>
     <td>4. 撰写</td>
     <td>按用户给定的章节框架输出，引用格式符合学术规范</td>
     <td>格式化的绪论 + 文献综述草稿</td>
@@ -137,7 +142,7 @@ cp -r efficient-literature-survey ~/.claude/skills/
 pip install -r requirements.txt
 ```
 
-> **Windows 用户注意**：如果终端默认编码为 GBK，运行前请先执行 `chcp 65001` 或 `set PYTHONIOENCODING=utf-8`，避免中文输出乱码。
+> **Windows 用户注意**：脚本已内置三层 UTF-8 强制防护（`reconfigure` → `TextIOWrapper` → fd `reopen`），无需手动执行 `chcp 65001`。如仍遇到乱码，请执行 `set PYTHONIOENCODING=utf-8` 后重新运行。
 
 ### 使用方式
 

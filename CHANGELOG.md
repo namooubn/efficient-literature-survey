@@ -6,21 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Monograph TOC extraction**: For PDFs >100 pages, scans the first 20 pages for a table of contents, extracts chapter structure (title, page_start, page_end), and matches relevant chapters against user-provided `--keywords`. McCombs 204-page monograph now extracts only the relevant chapter (e.g., Chapter 3, pp.23-45) instead of front-matter bias.
+- **Stage 3.5 Outline Confirmation (SKILL.md)**: Inserted a mandatory outline-confirmation stage between Stage 3 (reading) and Stage 4 (writing). Outputs a bullet-point level outline (section headings, core arguments, planned citations, word-count estimates, monograph chapter mappings). User must explicitly confirm before Stage 4 proceeds. Even Fast/Semi-Fast modes cannot skip this checkpoint — honoring the user's intent of "我不着急 一步步来".
+- **Monograph TOC extraction**: For PDFs >100 pages, scans the first 20 pages for a table of contents, extracts chapter structure (title, page_start, page_end), and matches relevant chapters against user-provided `--keywords`. McCombs 204-page monograph now extracts only the relevant chapter (e.g., Chapter 3, pp.23-45) instead of front-matter bias. Also extracts text from top-3 matched chapters (up to 8k chars each) into `chapter_texts` for downstream LLM semantic re-ranking.
 - **Encrypted PDF tiered handling**: Replaced binary encrypted/unencrypted with two tiers. "Light" encryption (PyPDF2 `is_encrypted=True` but empty-password decrypt succeeds) — pdfplumber can still read content; marked as `encryption_level: "light"` and proceeds with extraction. "Full" encryption (decrypt fails) — marked as `encryption_level: "full"` and skipped with a note. Previously, all encrypted PDFs were treated as unreadable.
 - **Chinese layout-aware metadata fallback**: `extract_meta_fallback_from_text_enhanced()` uses pdfplumber font-size analysis to identify the title line (largest font in first-page words), and CNKI watermark filtering (`strip_cnki_watermarks()`) removes repeated header noise. Author regex now also matches correspondence authors (`通讯作者`).
-- **Windows GBK encoding warning downgrade**: `run_env_check()` now inspects `sys.stdout.encoding` and `PYTHONIOENCODING`. If UTF-8 is already enforced, outputs `[INFO] Encoding OK` instead of `[WARN] GBK detected`, reducing user anxiety on correctly-configured terminals.
+- **Windows GBK encoding triple-layer protection**: `extract_literature_metadata.py` now enforces UTF-8 via three layers: (1) `sys.stdout.reconfigure(encoding="utf-8")`, (2) `io.TextIOWrapper` fallback, (3) `open(sys.stdout.fileno(), mode="w", encoding="utf-8")` direct fd reopen. `run_env_check()` inspects actual stdout encoding and reports `[OK] 脚本已强制 UTF-8 输出（三层防护已生效）` instead of relying on `chcp 65001` which is unstable in Windows bash.
+- **Chinese filename metadata parser (`_parse_filename_metadata`)**: Supports Chinese naming conventions (`作者_标题.pdf`, `作者、作者_标题.pdf`), English (`Smith_Deep_Learning.pdf`, `Smith_et_al_2020.pdf`), citation-style filenames (`Author. Title[J]. Journal...pdf`), and mixed formats. When PDF metadata is empty, the parser extracts author, title, and year from the filename with high accuracy.
 - **Semi-Fast Mode (Mode D)**: SKILL.md now supports a new fast-path where all 5 Stage-0 configs are provided **and** the user does not request per-stage confirmation. Stage 1, 2, and 3 checkpoints are still emitted, but Claude auto-advances without asking "Ready to proceed?" each time. Faster than Mode B/C for power users who trust the defaults.
 
 ### Changed
 
 - **pdfplumber strategy**: Previously pdfplumber was an optional fallback (only opened when PyPDF2 extracted <500 characters). Now pdfplumber is always opened when available to perform: (a) layout/font analysis for title detection, (b) TOC extraction for monographs, and (c) light-encryption readability verification. This makes pdfplumber a functional prerequisite for the new v1.3.0 features, though the script still degrades gracefully without it.
+- **Bibliographic info extraction scope**: When first-page text lacks journal/volume/issue/page info, the system now falls back to scanning all extracted text (not just first page) since bibliographic metadata often appears in headers/footers of later pages.
 
 ### Fixed
 
-- Encrypted PDF false positives: CNKI-downloaded PDFs that are "lightly encrypted" (PyPDF2 reports encrypted but open fine) were previously treated as fully encrypted and skipped. They are now extracted normally.
-- GBK false positives: Windows terminals with `PYTHONIOENCODING=utf-8` set were still warned about GBK encoding. Now correctly recognized as safe.
-- Chinese metadata incompleteness: PDFs from CNKI often had empty `/Title` metadata and "CNKI" as the extracted title. The enhanced fallback now filters CNKI watermarks and uses font-size heuristics to recover the real title.
+- **Chinese PDF metadata extraction failure**: Previously, all Chinese PDFs from CNKI failed title/author extraction (12/12 cases). The new `_parse_filename_metadata()` + enhanced `extract_bib_info_from_text()` with expanded Chinese regex patterns now successfully extracts author, title, journal, volume, issue, page range, and DOI for Chinese academic papers.
+- **Encrypted PDF false positives**: CNKI-downloaded PDFs that are "lightly encrypted" (PyPDF2 reports encrypted but open fine) were previously treated as fully encrypted and skipped. They are now extracted normally.
+- **GBK false positives / unstable encoding**: Windows terminals with `PYTHONIOENCODING=utf-8` set were still warned about GBK encoding. Now correctly recognized as safe via triple-layer stdout reconfiguration. `chcp 65001` is no longer required.
+- **ISSN misidentified as page range**: Four-digit hyphenated numbers (e.g., `1674-6708`) were incorrectly extracted as page ranges. Added ISSN heuristic filter: skip if both parts are 4 digits >= 1000.
+- **Chinese metadata incompleteness**: PDFs from CNKI often had empty `/Title` metadata and "CNKI" as the extracted title. The enhanced fallback now filters CNKI watermarks and uses font-size heuristics to recover the real title.
+- **Citation engine missing page/volume/issue**: `generate_citation()` now receives richer metadata from the enhanced extraction pipeline, producing complete GB/T 7714 citations with volume(issue) and page ranges populated from text heuristics.
 
 ## [1.2.0] - 2026-04-19
 

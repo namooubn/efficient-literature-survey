@@ -37,6 +37,11 @@ Supports **custom chapter structures** or **default templates** (Chinese / Engli
     <td>Extracted arguments and quotes</td>
   </tr>
   <tr>
+    <td><b>3.5 Outline</b></td>
+    <td>Generate a bullet-point level outline (arguments, citation numbers, word-count estimates, monograph chapter mappings) from Stage 3 summaries — <b>user confirmation required before Stage 4</b></td>
+    <td>Structured outline (pending confirmation)</td>
+  </tr>
+  <tr>
     <td>4. Write</td>
     <td>Write according to user's chapter framework, with academically-compliant citations</td>
     <td>Formatted introduction + review draft</td>

@@ -22,12 +22,28 @@ from datetime import datetime
 from pathlib import Path
 
 # Fix Windows terminal encoding (GBK → UTF-8) to prevent mojibake in Chinese output
+import io
+
+# Layer 1: reconfigure (Python 3.7+)
 try:
     sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 except AttributeError:
-    import io
+    pass
+
+# Layer 2: forced TextIOWrapper fallback
+try:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+except (AttributeError, io.UnsupportedOperation):
+    pass
+
+# Layer 3: ultimate fallback — reopen file descriptor directly
+try:
+    sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1)
+    sys.stderr = open(sys.stderr.fileno(), mode="w", encoding="utf-8", buffering=1)
+except (AttributeError, io.UnsupportedOperation, OSError):
+    pass
 
 # Ensure sub-package imports resolve when run as a standalone script
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -154,13 +170,14 @@ def run_env_check(lit_dir: Path | None = None) -> bool:
     stdout_enc = getattr(sys.stdout, "encoding", "")
     py_env_enc = os.environ.get("PYTHONIOENCODING", "")
     print(f"\n  系统默认编码: {encoding}")
+    print(f"  当前 stdout 编码: {stdout_enc}")
     if encoding.lower() in ("gbk", "gb2312", "cp936"):
-        # If UTF-8 is already forced, downgrade to INFO
-        if (stdout_enc and stdout_enc.lower() == "utf-8") or py_env_enc.lower() == "utf-8":
-            print("  [INFO] Windows 默认编码为 GBK，但脚本已强制 UTF-8 输出")
+        if stdout_enc and stdout_enc.lower() == "utf-8":
+            print("  [OK] 脚本已强制 UTF-8 输出（三层防护已生效）")
         else:
             print("  [WARN] Windows 默认编码为 GBK，中文输出可能出现乱码")
-            print("  建议执行: chcp 65001  或  set PYTHONIOENCODING=utf-8")
+            print("  建议：执行  set PYTHONIOENCODING=utf-8  后重新运行")
+            print("  或在 PowerShell 中执行:  $env:PYTHONIOENCODING='utf-8'")
 
     # 3. File preview (if folder provided)
     if lit_dir and lit_dir.exists():

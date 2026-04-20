@@ -12,6 +12,7 @@ from core.config import (
 from core.helpers import (
     detect_scanned_pdf,
     extract_bib_info_from_text,
+    extract_chapter_text,
     extract_meta_fallback_from_text,
     extract_meta_fallback_from_text_enhanced,
     extract_toc_from_pdf,
@@ -151,7 +152,7 @@ def extract_pdf(pdf_path: str, max_pages: int = 0, keywords: str = "") -> dict:
                 except Exception:
                     pass
 
-                # Monograph TOC extraction
+                # Monograph TOC extraction + chapter text extraction
                 if result["pages"] > MONOGRAPH_MIN_PAGES:
                     try:
                         toc = extract_toc_from_pdf(pdf, result["pages"])
@@ -163,6 +164,28 @@ def extract_pdf(pdf_path: str, max_pages: int = 0, keywords: str = "") -> dict:
                                 result["note"] += (
                                     f"检测到{len(matched)}个匹配章节；"
                                 )
+                                # Extract text from top-3 matched chapters
+                                # for LLM semantic re-ranking in Stage 2/3
+                                chapter_texts = []
+                                for ch in matched[:3]:
+                                    try:
+                                        ch_text = extract_chapter_text(
+                                            pdf, ch, max_chars=8000
+                                        )
+                                        if ch_text:
+                                            chapter_texts.append(
+                                                {
+                                                    "chapter": ch["chapter"],
+                                                    "page_start": ch["page_start"],
+                                                    "page_end": ch["page_end"],
+                                                    "text_preview": ch_text[:1500],
+                                                    "text_full": ch_text,
+                                                }
+                                            )
+                                    except Exception:
+                                        continue
+                                if chapter_texts:
+                                    result["chapter_texts"] = chapter_texts
                     except Exception:
                         pass
 
@@ -190,21 +213,31 @@ def extract_pdf(pdf_path: str, max_pages: int = 0, keywords: str = "") -> dict:
         if clean_first != result["first_page_text"]:
             result["first_page_text"] = safe_truncate(clean_first)
 
-    # Extract bibliographic info
+    # Extract bibliographic info from first page
     bib_info = extract_bib_info_from_text(result["first_page_text"])
     result.update(bib_info)
 
-    # ------------------------------------------------------------------
-    # Author: prefer filename extraction; skip unreliable text fallback
-    # ------------------------------------------------------------------
-    if not result.get("author_from_meta"):
-        author_from_fn = _extract_author_from_filename(result["filename"])
-        if author_from_fn:
-            result["author_from_meta"] = author_from_fn
+    # Fallback: scan all extracted text for missing bib fields
+    # (journal info sometimes appears in headers/footers of later pages)
+    if not all(result.get(k) for k in ["journal", "volume", "issue", "page_range"]):
+        full_bib = extract_bib_info_from_text(total_text)
+        for key in ["journal", "volume", "issue", "page_range", "doi"]:
+            if not result.get(key) and full_bib.get(key):
+                result[key] = full_bib[key]
 
     # ------------------------------------------------------------------
-    # Title / year fallback from first-page text (author left empty if
-    # neither metadata nor filename yielded a value)
+    # Filename fallback: parse author, title, year from filename
+    # ------------------------------------------------------------------
+    fn_meta = _parse_filename_metadata(result["filename"])
+    if not result.get("author_from_meta") and fn_meta["author"]:
+        result["author_from_meta"] = fn_meta["author"]
+    if not result.get("title_from_meta") and fn_meta["title"]:
+        result["title_from_meta"] = fn_meta["title"]
+    if not result.get("year") and fn_meta["year"]:
+        result["year"] = fn_meta["year"]
+
+    # ------------------------------------------------------------------
+    # Title / year fallback from first-page text
     # ------------------------------------------------------------------
     has_meta_gap = (
         not result.get("title_from_meta")
@@ -227,26 +260,120 @@ def extract_pdf(pdf_path: str, max_pages: int = 0, keywords: str = "") -> dict:
 
     # Year from filename as last resort
     if not result.get("year"):
-        m = re.search(r"\b(19|20)\d{2}\b", result["filename"])
+        m = re.search(r"(?:^|[^0-9])(19\d{2}|20\d{2})(?:[^0-9]|$)", result["filename"])
         if m:
-            result["year"] = m.group(0)
+            result["year"] = m.group(1)
 
     result["is_scanned"] = detect_scanned_pdf(read_page_texts, result["pages"])
 
     return result
 
 
-def _extract_author_from_filename(filename: str) -> str:
-    """Heuristic author extraction from filename before first period."""
+def _parse_filename_metadata(filename: str) -> dict:
+    """
+    Parse author, title and year from academic paper filename.
+
+    Supports Chinese and English naming conventions:
+      - Chinese: 张三_人工智能伦理研究.pdf, 张三、李四_深度学习.pdf
+      - English: Smith_Deep_Learning.pdf, Smith_et_al_2020.pdf
+      - Mixed:  Zhang_人工智能研究_2020.pdf, 2020_张三_深度学习.pdf
+      - Citation-style: Van Dijck J, Poell T. Understanding social media logic[J]. ...pdf
+
+    Returns {"author": str, "title": str, "year": str}.
+    """
     from pathlib import Path
 
+    result = {"author": "", "title": "", "year": ""}
     stem = Path(filename).stem
-    parts = stem.split(".", 1)
-    if len(parts) < 2:
-        return ""
-    author_part = parts[0].strip()
-    words = author_part.split()
-    capitalized = [w for w in words if w and w[0].isupper()]
-    if len(capitalized) >= 2 and 5 <= len(author_part) <= 80:
-        return author_part
-    return ""
+
+    # Strip citation markers like [J]. [M]. [C]. that sometimes appear in filenames
+    stem_clean = re.sub(r"\[[JMCD]\]\.?", "", stem)
+
+    # Extract year first (anywhere in filename)
+    # Use non-digit boundaries because underscore is a \w char and breaks \b
+    year_match = re.search(r"(?:^|[^0-9])(19\d{2}|20\d{2})(?:[^0-9]|$)", stem_clean)
+    if year_match:
+        result["year"] = year_match.group(1)
+
+    # --- Pattern 0: Citation-style filenames with explicit author-title boundary ---
+    # e.g. "Van Dijck J, Poell T. Understanding social media logic..."
+    # The first period (followed by capital letter) separates author from title
+    citation_match = re.match(
+        r"^([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*\s+[A-Z](?:,\s*[A-Z][a-zA-Z]+\s+[A-Z])*)\.\s*(.+)$",
+        stem_clean,
+    )
+    if citation_match:
+        result["author"] = citation_match.group(1).strip()
+        raw_title = citation_match.group(2).strip()
+        # Truncate at second period if it looks like a journal/publisher divider
+        raw_title = re.split(r"\.\s*(?=[A-Z])", raw_title, 1)[0]
+        result["title"] = raw_title
+        return result
+
+    # Split by common separators: _, -, ——, space, ·
+    # BUT: keep space-separated English names together when possible
+    separators = r"[_\-——·]+"
+    parts = re.split(separators, stem_clean)
+    parts = [p.strip() for p in parts if p.strip()]
+
+    if not parts:
+        return result
+
+    # Identify author part
+    author_idx = -1
+    for i, part in enumerate(parts):
+        # Pattern A: Pure Chinese name (2-4 hanzi)
+        if re.match(r"^[\u4e00-\u9fff]{2,4}$", part):
+            author_idx = i
+            result["author"] = part
+            break
+
+        # Pattern B: Multiple Chinese names separated by 、，,
+        if re.match(r"^[\u4e00-\u9fff]{2,4}(?:[、，,][\u4e00-\u9fff]{2,4})+$", part):
+            author_idx = i
+            result["author"] = part.replace("，", "、").replace(",", "、")
+            break
+
+        # Pattern C: English name(s) with comma separation (e.g. "Van Dijck J, Poell T")
+        # Treat the whole part before first period as author block
+        if re.match(r"^[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*\s+[A-Z](?:,\s*[A-Z][a-zA-Z]+\s+[A-Z])*$", part):
+            author_idx = i
+            result["author"] = part
+            break
+
+        # Pattern D: English name with initial cap (single surname)
+        if (
+            re.match(r"^[A-Z][a-zA-Z]+(?:_[A-Z][a-zA-Z]+)*$", part)
+            and len(part) >= 2
+        ):
+            author_idx = i
+            result["author"] = part.replace("_", " ")
+            break
+
+        # Pattern E: English name with et al / et_al marker
+        if re.match(r"^[A-Z][a-zA-Z]*(?:\s+et\s+al|\s+et_al|_et_al)$", part, re.I):
+            author_idx = i
+            result["author"] = part.replace("_", " ")
+            break
+
+    # Build title from remaining parts
+    if author_idx >= 0:
+        other_parts = [
+            p for j, p in enumerate(parts) if j != author_idx
+        ]
+        # Filter out year-only parts
+        other_parts = [
+            p for p in other_parts if not re.match(r"^(19|20)\d{2}$", p)
+        ]
+        result["title"] = " ".join(other_parts)
+    else:
+        # No author identified — treat everything as title (minus year)
+        non_year_parts = [
+            p for p in parts if not re.match(r"^(19|20)\d{2}$", p)
+        ]
+        result["title"] = " ".join(non_year_parts)
+
+    if result["title"]:
+        result["title"] = re.sub(r"[_\-——\s·]+", " ", result["title"]).strip()
+
+    return result
